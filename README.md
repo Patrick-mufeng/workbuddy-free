@@ -5,7 +5,7 @@
 <h1 align="center">workbuddy-free</h1>
 
 <p align="center">
-  <b>把腾讯 CodeBuddy 账号变成 OpenAI 兼容 API 的多账号网关 · 自带 Web 管理面板</b>
+  <b>把腾讯 WorkBuddy 账号变成 OpenAI 兼容 API 的多账号网关 · 自带 Web 管理面板</b>
 </p>
 
 <p align="center">
@@ -33,13 +33,13 @@
 
 ## 这是什么
 
-`workbuddy-free` 是一个自托管的 **OpenAI 兼容反向代理网关**，把腾讯 CodeBuddy（`copilot.tencent.com`）账号包装成标准的 `/v1/chat/completions` 服务，并配一套内嵌的 Web 运维面板。
+`workbuddy-free` 是一个自托管的 **OpenAI 兼容反向代理网关**，把腾讯 WorkBuddy（`copilot.tencent.com`）账号包装成标准的 `/v1/chat/completions` 服务，并配一套内嵌的 Web 运维面板。
 
 官方不提供 OpenAI 形态的开放 API。本项目通过 **OAuth 设备授权**获取账号凭证，在网关侧完成 token 自动刷新、账号池调度与流量治理，对客户端只暴露 OpenAI 接口——**现有 SDK、前端、CLI 工具零改造接入**。
 
 面向**个人多账号**场景：多账号共享、单号故障自动换号、冷却与熔断防止雪崩、会话粘性保证多轮上下文不跳号。
 
-> ⚠️ **合规须知**：本项目是**非官方**网关，使用 CodeBuddy 账号作为上游，**仅限本人授权账号、本机 / 私有环境测试**。详细边界见[安全与合规](#安全与合规)。
+> ⚠️ **合规须知**：本项目是**非官方**网关，使用 WorkBuddy 账号作为上游，**仅限本人授权账号、本机 / 私有环境测试**。详细边界见[安全与合规](#安全与合规)。
 
 ## 核心能力
 
@@ -91,7 +91,7 @@
 - **单文件二进制**（推荐）：Windows / macOS / Linux 直接下载运行，**无需 Docker、无需 Go**
 - **Docker + Docker Compose**（服务端部署，镜像内已含低权限用户与全部工具脚本），**或**
 - 从源码构建：宿主机 Go ≥ 1.22
-- 一个或多个已注册的 CodeBuddy 账号
+- 一个或多个已注册的 WorkBuddy 账号
 
 ### 方式一：下载预编译二进制（最省事）
 
@@ -486,7 +486,7 @@ curl -s http://localhost:7863/v1/chat/completions \
 
 - 仅限**本人授权账号**、本机 / 私有环境测试
 - 不得共享、转售、违规分发，或用于违反目标平台条款的用途
-- 遵守 CodeBuddy 平台服务条款与所在地法律
+- 遵守 WorkBuddy 平台服务条款与所在地法律
 - 妥善保管 `auths/`（明文凭证）与网关端口
 
 ## 常见问题
@@ -585,7 +585,7 @@ sudo chown -R 10001:10001 ./auths ./data ./config.json
 
 ## 免责声明
 
-本项目仅供学习和研究使用。使用者需遵守 CodeBuddy 服务条款，自行承担使用风险（包括账号封禁、条款违约等）。作者不对任何因使用本项目产生的直接或间接损失负责。
+本项目仅供学习和研究使用。使用者需遵守 WorkBuddy 服务条款，自行承担使用风险（包括账号封禁、条款违约等）。作者不对任何因使用本项目产生的直接或间接损失负责。
 
 ## 致谢与许可
 
@@ -596,4 +596,4 @@ sudo chown -R 10001:10001 ./auths ./data ./config.json
 - 上游原始项目：[Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api)
 - 本分支起点：[linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel)
 
-本项目不授予任何上游（CodeBuddy / 腾讯）接口或服务的权利；使用者仍需自行遵守上游服务条款。
+本项目不授予任何上游（WorkBuddy / 腾讯）接口或服务的权利；使用者仍需自行遵守上游服务条款。
