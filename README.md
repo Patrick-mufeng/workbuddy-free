@@ -9,11 +9,20 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Patrick-mufeng/workbuddy-free/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Patrick-mufeng/workbuddy-free?style=flat-square&color=2ad4e8"></a>
   <img alt="Go" src="https://img.shields.io/badge/Go-1.22.5-00ADD8?logo=go&logoColor=white&style=flat-square">
   <img alt="API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square">
   <img alt="Deploy" src="https://img.shields.io/badge/Deploy-Single_Binary%20%7C%20Docker-2496ED?style=flat-square">
   <img alt="Transport" src="https://img.shields.io/badge/Transport-SSE%20%2F%20Streaming-0DBD8B?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/License-MIT-3DA639?style=flat-square">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Patrick-mufeng/workbuddy-free/releases/latest"><b>⬇️ 下载最新版本</b></a>
+  &nbsp;·&nbsp;
+  <a href="#快速开始">快速开始</a>
+  &nbsp;·&nbsp;
+  <a href="#界面预览">界面预览</a>
 </p>
 
 <p align="center">
@@ -79,12 +88,44 @@
 
 ### 环境要求
 
+- **单文件二进制**（推荐）：Windows / macOS / Linux 直接下载运行，**无需 Docker、无需 Go**
 - **Docker + Docker Compose**（服务端部署，镜像内已含低权限用户与全部工具脚本），**或**
-- **Windows / macOS / Linux 直接跑单文件二进制**（无需 Docker）
+- 从源码构建：宿主机 Go ≥ 1.22
 - 一个或多个已注册的 CodeBuddy 账号
-- 宿主机 Go ≥ 1.22（仅从源码构建时需要）
 
-### 方式一：Docker Compose
+### 方式一：下载预编译二进制（最省事）
+
+到 [**Releases**](https://github.com/Patrick-mufeng/workbuddy-free/releases/latest) 下载对应平台的压缩包：
+
+| 平台 | 文件 |
+|---|---|
+| Windows 64 位 | `workbuddy-free_<版本>_windows_amd64.zip` |
+| Linux x86_64 | `workbuddy-free_<版本>_linux_amd64.tar.gz` |
+| Linux ARM64 | `workbuddy-free_<版本>_linux_arm64.tar.gz` |
+| macOS Apple Silicon | `workbuddy-free_<版本>_darwin_arm64.tar.gz` |
+| macOS Intel | `workbuddy-free_<版本>_darwin_amd64.tar.gz` |
+
+解压后**直接运行主程序即可**，无需任何依赖：
+
+```bash
+# Windows
+.\wb2api.exe -config config.json
+
+# Linux / macOS
+./wb2api -config config.json
+```
+
+首次启动会在当前目录**自动生成 `config.json`**（含随机 `api_key`，日志打印一次），随后浏览器打开 <http://127.0.0.1:7863/panel/> 添加账号。
+
+各包内容：
+
+- **Windows**：`wb2api.exe` 主程序 + `login.exe` / `signin.exe` / `credit.exe` / `trial.exe` 工具 + `config.example.json`
+- **Linux / macOS**：`wb2api` 主程序 + `login` / `signin_bin` / `credit` / `trial` 工具 + `login.sh` / `signin.sh` / `credit.sh` 脚本 + `config.example.json`
+
+> 压缩包均附 `SHA256SUMS.txt` 校验文件，可用 `sha256sum -c SHA256SUMS.txt` 验证完整性。
+> 二进制为 `CGO_ENABLED=0` 静态构建，解压即用，不依赖系统库。
+
+### 方式二：Docker Compose
 
 ```bash
 git clone https://github.com/Patrick-mufeng/workbuddy-free.git
@@ -117,20 +158,36 @@ docker compose down        # 停止并移除容器（数据在 ./auths 与 ./dat
 > `sudo chown -R 10001:10001 ./auths ./data ./config.json` ·
 > compose 里设 `user: "0:0"`（省事但容器逃逸面更大）。
 
-### 方式二：Windows 单文件运行（无需 Docker）
+### 方式三：从源码构建（开发调试）
 
-```powershell
-# 1) 从源码构建（本仓库不提供预编译产物，理由见「安全与合规」）
-go build -trimpath -ldflags="-s -w" -o wb2api.exe ./cmd/server
-
-# 2) 直接运行：首次启动自动生成 config.json（含随机 api_key，日志打印一次）
-.\wb2api.exe -config config.json
-
-# 3) 浏览器打开面板添加账号
-#    http://127.0.0.1:7863/panel/
+```bash
+go build ./...                     # 编译检查
+go vet ./...                       # 静态检查
+go test ./...                      # 完整测试套件
+go run ./cmd/server -config config.json
 ```
 
-exe 为**单文件自包含**（前端资源已 embed 进二进制），拷到任意 Windows 机器即可运行，只需保证 `auths/`（凭证）与 `data/`（状态）目录可写。
+构建单文件二进制：
+
+```bash
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o wb2api.exe ./cmd/server   # Windows
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o wb2api     ./cmd/server   # Linux / macOS
+
+# 工具（可选）
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o login      ./cmd/login
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o signin_bin ./cmd/signin
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o credit     ./cmd/credit
+```
+
+交叉编译其他平台（Go 原生支持，无需额外工具链）：
+
+```bash
+CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o wb2api-linux-amd64  ./cmd/server
+CGO_ENABLED=0 GOOS=linux  GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o wb2api-linux-arm64  ./cmd/server
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o wb2api-darwin-arm64 ./cmd/server
+```
+
+构建产物为**单文件自包含**（前端资源已 embed 进二进制），拷到任意机器即可运行，只需保证 `auths/`（凭证）与 `data/`（状态）目录可写。
 
 仓库自带两个 Windows 辅助脚本（含本机路径，已被 `.gitignore` 排除）：
 
@@ -138,24 +195,6 @@ exe 为**单文件自包含**（前端资源已 embed 进二进制），拷到�
 |---|---|
 | `start-gateway.bat` | 双击启动：后台常驻、自动健康检查、日志落 `data/wb2api.log` |
 | `stop-gateway.bat` | 双击停止 |
-
-### 方式三：源码运行（开发调试）
-
-```bash
-go build ./...
-go vet ./...
-go test ./...                      # 完整测试套件
-go run ./cmd/server -config config.json
-```
-
-构建全部二进制：
-
-```bash
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o wb2api      ./cmd/server
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o signin_bin ./cmd/signin
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o login      ./cmd/login
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o credit     ./cmd/credit
-```
 
 ### 添加账号
 
@@ -418,7 +457,7 @@ curl -s http://localhost:7863/v1/chat/completions \
 | `python3 scripts/probe_active.py` | 活跃上报手动诊断 / 补跑（写操作默认 dry-run，需 `--yes`） |
 | `start-gateway.bat` / `stop-gateway.bat` | Windows 本机启动 / 停止辅助 |
 
-二进制不在 git 中：脚本首次使用自动 `go build` 对应 `cmd/*`（Docker 镜像内已预编译）。
+二进制不进版本库：**Release 压缩包已含全部二进制**；从仓库源码使用时，脚本会在首次运行自动 `go build` 对应 `cmd/*`（Docker 镜像内已预编译）。
 
 ### 账号管理
 

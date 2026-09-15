@@ -20,6 +20,9 @@ config.json
 *.tmp
 __pycache__/
 
+# 多平台构建产物暂存目录（打 Release 用，产物走 GitHub Release 而非版本库）
+/dist/
+
 # Backups (contains auth tokens)
 backups/
 
