@@ -26,12 +26,14 @@ __pycache__/
 # Backups (contains auth tokens)
 backups/
 
-# IDE
+# IDE / 本地工作文档
 .idea/
 .vscode/
 LOOP.md
 PLAN.md
 SPEC.md
+# docs/ 是本地使用文档（guide.md + 配图，自包含可直接拷走），仅本地留存，
+# 不进版本库也不进镜像。
 docs/
 
 # 设计/计划文档（但 README.md 必须进版本库）

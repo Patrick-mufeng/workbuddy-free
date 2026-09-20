@@ -22,6 +22,8 @@
   &nbsp;·&nbsp;
   <a href="#快速开始">快速开始</a>
   &nbsp;·&nbsp;
+  <a href="#接入其他-agent">接入其他 Agent</a>
+  &nbsp;·&nbsp;
   <a href="#界面预览">界面预览</a>
 </p>
 
@@ -83,6 +85,12 @@
 在线编辑 `config.json`，涉及运行期的字段**保存即生效**；面板支持明暗两套主题，首次访问跟随系统偏好。
 
 <img src="assets/screenshots/05-config-light.png" alt="配置（浅色）" width="900">
+
+### 运行日志
+
+按「任务 / 对话 / 系统」分频道筛选；对话频道是请求级日志，每条一行带 TTFB 与 token 速率：
+
+<img src="assets/screenshots/06-logs-dark.png" alt="运行日志" width="900">
 
 ## 快速开始
 
@@ -202,6 +210,10 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o wb
 
 打开 `http://127.0.0.1:7863/panel/`，点右上角「**添加账号**」：面板展示授权链接 → 浏览器完成登录 → 自动检测并落盘凭证 → **热加载进池（无需重启）**，顺带完成首次签到。支持国内版（CN）与国际版（Global）两种账号。
 
+<img src="assets/screenshots/07-add-account-dark.png" alt="添加账号" width="820">
+
+> **凭证文件名的约定**：落盘文件是 `auths/workbuddy-<uid>.json`。这个前缀是对接上游的固定约定，**不要改名**，改了网关会读不到账号。
+
 **方式 B：命令行脚本（仅 Linux / macOS，依赖 bash + python3）**
 
 ```bash
@@ -209,7 +221,7 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o wb
 # 按提示在浏览器打开授权链接 → 回到终端确认 → 凭证落盘 auths/workbuddy-<uid>.json
 ```
 
-> Windows 用户请用方式 A（或 WSL）。凭证文件名 `workbuddy-<uid>.json` 是对接上游的固定约定，请勿改名。
+> Windows 用户请用方式 A（或 WSL）。
 
 ### 验证
 
@@ -236,6 +248,113 @@ curl -s http://localhost:7863/v1/chat/completions \
 > **模型名带域前缀**：`cn:<模型名>` 路由到国内版账号，`global:<模型名>` 路由到国际版账号。
 > 不带前缀的裸名默认按 `cn` 处理。两个域的模型清单不重叠，填错域会被上游拒绝。
 > 用 `/v1/models` 取完整清单。
+
+## 接入其他 Agent
+
+网关对客户端只暴露标准 OpenAI 接口，因此**任何支持 OpenAI 协议的客户端都能直接接入**，无需改造。
+
+### 接入三要素
+
+| 要素 | 填什么 | 从哪拿 |
+|---|---|---|
+| **接口地址** | `http://<网关地址>:7863/v1` | 网关所在机器 IP，本机即 `127.0.0.1` |
+| **API 密钥** | `sk-...` | 面板「配置」页的 **API 密钥** 字段，或 `config.json` 的 `api_key` |
+| **模型名** | `cn:glm-5.2` 等 | 面板「模型与档位」页第一列，或 `GET /v1/models` |
+
+面板「配置」页的 **API 密钥**（默认掩码，点右侧「显示」可明文查看）：
+
+<img src="assets/screenshots/05-config-light.png" alt="配置页 - API 密钥位置" width="820">
+
+面板「模型与档位」页第一列就是可用的模型名：
+
+<img src="assets/screenshots/02-models-dark.png" alt="模型与档位 - 模型名列表" width="820">
+
+### 填写方式
+
+各客户端的菜单名称不同，但需要填的都是同一组字段。找到「添加模型服务 / Provider」入口：
+
+| 字段（各家叫法略不同） | 填什么 |
+|---|---|
+| 类型 / Provider / 接口格式 | **OpenAI 兼容 / OpenAI Compatible** |
+| 接口地址 / Base URL / API 地址 | `http://<网关地址>:7863/v1` |
+| API Key / 密钥 | 上一步拿到的 `sk-...` |
+| 模型名 / Model | `cn:glm-5.2` 这样带前缀的名字 |
+
+常见客户端的「类型」该选什么：
+
+| 客户端 | 选什么 |
+|---|---|
+| Cherry Studio / ChatBox / NextChat / LobeChat / Open WebUI | OpenAI（或「OpenAI 兼容」） |
+| Cline / Roo Code / Continue（VS Code 插件） | OpenAI Compatible |
+| Dify / One API / New API | OpenAI-API-compatible |
+| **Codex** | 需把 provider 的 `wire_api` 设为 `chat` |
+| **Claude Code** | ⚠️ 不支持直连（见下方速查表） |
+
+#### 示例：ZCode
+
+配置位于 `~/.zcode/v2/config.json`：
+
+```jsonc
+{
+  "provider": {
+    "<自动生成的 UUID>": {
+      "name": "workbuddy",
+      "kind": "openai-compatible",              // ⚠️ 必须是 openai-compatible
+      "options": {
+        "apiKey": "sk-你的密钥",
+        "baseURL": "http://127.0.0.1:7863/v1",  // ⚠️ 必须带 /v1
+        "apiKeyRequired": true
+      },
+      "models": {
+        "cn:glm-5.2": {
+          "limit": { "context": 1000000, "output": 131072 },
+          "modalities": { "input": ["text"], "output": ["text"] }
+        }
+      }
+    }
+  }
+}
+```
+
+**两个必须注意的地方**（写错任意一处都连不上）：
+
+- `kind` 必须是 `openai-compatible`。填成 `openai` 会走 **Responses 协议**（请求 `/v1/responses`），本网关未实现该端点，必定失败。
+- `baseURL` 必须带 `/v1` 后缀。少了它请求会落到 `/chat/completions`，同样是 404。
+
+### 验证接入是否成功
+
+**先用 curl 打通，再配客户端**——这样能一步区分「网关问题」还是「客户端配置问题」：
+
+```bash
+curl -s http://127.0.0.1:7863/v1/chat/completions \
+  -H "Authorization: Bearer sk-你的密钥" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"cn:glm-5.2","messages":[{"role":"user","content":"hi"}],"stream":false}'
+```
+
+返回标准 OpenAI 格式 JSON（含 `choices[0].message.content`）即网关正常。
+
+**第二步**：在客户端发一条消息，再看面板「运行日志」有没有新增请求行、状态码是否为 200：
+
+```text
+| #205 | 14:14:44 | deepseek-v4 | stream | 200 | uid=········ | TTFB=3428ms | tok=104 | 27.2tok/s | total=3.8s |
+```
+
+> **高效排查技巧**：在客户端发请求后——
+> - **日志没有新增行** → 请求根本没到网关，问题在网络或地址（注意客户端是否跑在 WSL / Docker / 另一台机器里，那样 `127.0.0.1` 指向的不是宿主机）
+> - **有新增行但状态码非 200** → 问题在模型名或账号侧
+
+### 常见错误速查
+
+| 现象 | 原因 | 解决 |
+|---|---|---|
+| `404` | Base URL 少了 `/v1`，客户端又自己补一次，变成 `/v1/v1/...` | Base URL 填 `http://<host>:7863/v1` |
+| `404` | 用了 Anthropic 协议（`/v1/messages`） | Claude Code 不支持直连，需 OpenAI→Anthropic 转换代理 |
+| `404` | 用了 Responses 协议（`/v1/responses`） | Codex 需把 `wire_api` 设为 `chat` |
+| `401` | API 密钥不对 | 从面板「配置」页或 `config.json` 重新复制 |
+| 模型不可用 | 模型名不属于该域 | 加对 `cn:` / `global:` 前缀 |
+| 连不上 | 客户端在 WSL / 容器 / 另一台机器 | `127.0.0.1` 换成网关机器的局域网 IP |
+| `413` | 请求体超过 8 MB（多图 / 超长上下文） | 调大 `server.max_body_mb` |
 
 ## 配置说明
 
@@ -415,6 +534,16 @@ curl -s http://localhost:7863/v1/chat/completions \
 | **模型与档位** | 实时查询上游：积分倍率、默认思考档、支持档位、上下文长度、最大输出 |
 | **配置** | 在线编辑 `config.json`，含定时任务、账号池与流量治理参数、上游超时与 UA、提示词模式、脱敏与粘性开关 |
 | **运行日志** | 最近 500 行服务日志 + 请求表格日志（按任务 / 对话 / 系统分频道，可开关自动滚动） |
+
+几个实用细节：
+
+- **账号色条**：绿 = 可用，黄 = 冷却中，红 = 已禁用。卡在冷却的账号点行内「解冻」即可恢复。
+- **请求日志格式**：
+  ```text
+  | #204 | 14:14:32 | deepseek-v4 | stream | 200 | uid=········ | TTFB=3495ms | tok=163 | 40.3tok/s | total=4.0s |
+  ```
+  `TTFB` 是流式首帧耗时（非流式为 `-`）。**TTFB 高说明上游出字慢，tok/s 低说明生成慢**，据此可快速判断瓶颈在哪。
+- **任务队列**：点「扫描待办」拉取所有账号未完成的任务并排成一列，「执行全部待办」按账号串行执行，账号间可选并发 1-3，进度实时回填。
 
 **配置热生效**：保存后 `api_key`、`cooldown.soft_rate`、脱敏开关、`pool.*`、`schedule.*` **立即生效**；涉及进程装配期的字段（`listen`、`auth_dir`、`state_file`、`upstream.*`、`upstash.*`、`session_sticky.ttl`）会提示「需重启进程生效」。写入采用「深合并且原子替换」，只更新表单覆盖的键，手写的未知键原样保留。
 
