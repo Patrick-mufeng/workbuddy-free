@@ -19,6 +19,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/stats"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
@@ -58,6 +59,9 @@ type Config struct {
 	// false（显式逃生门）时即便 auth realm=global 也不提供 global: 模型名
 	// （modelList 不列 global 名单）。
 	GlobalEnabled bool
+
+	// Stats 时间序列用量统计（可选；nil = 只累计到 pool 的账号级总量，不出按天/按模型报表）。
+	Stats *stats.Recorder
 }
 
 // loadLive 返回当前运行期快照；Live 为 nil 时用静态字段合成。
@@ -452,7 +456,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			unbindSticky()
 		}
 	}
-	recordAttempt := func(uid string, delta pool.TokenUsageDelta, started time.Time) {
+	// recordAttempt 记一次账号尝试的账目：pool 的账号级累计（长期单调）+ 可选的时间
+	// 序列统计（按天/模型/账号，供面板报表）。failed 只影响统计口径——失败尝试计请求
+	// 次数与失败数、不计 token 与耗时，否则"失败时的 0"会把平均值拉低。
+	recordAttempt := func(uid string, delta pool.TokenUsageDelta, started time.Time, failed bool) {
 		delta.Model = peek.Model
 		latency := time.Since(started)
 		latencyMs := latency.Milliseconds()
@@ -466,6 +473,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			delta.TokensPerSecond = float64(delta.CompletionTokens) * 1000 / float64(latencyMs)
 		}
 		h.cfg.Pool.RecordTokenUsage(uid, delta)
+		if h.cfg.Stats != nil {
+			h.cfg.Stats.Record(stats.Sample{
+				UID: uid, Model: delta.Model, Failed: failed, LatencyMs: latencyMs, Delta: delta,
+			})
+		}
 	}
 
 	// 系统提示词改写（出站前、轮转前；每个请求一次）。
@@ -568,14 +580,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if terr != nil {
 			// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
 			// 上游 client 已打 transport error 日志。
-			recordAttempt(acct.UID, pool.TokenUsageDelta{}, attemptStarted)
+			recordAttempt(acct.UID, pool.TokenUsageDelta{}, attemptStarted, true)
 			st.status = http.StatusServiceUnavailable
 			lastErr = terr
 			fail(acct.UID)
 			continue
 		}
 		if status >= 400 {
-			recordAttempt(acct.UID, pool.TokenUsageDelta{}, attemptStarted)
+			recordAttempt(acct.UID, pool.TokenUsageDelta{}, attemptStarted, true)
 			st.status = status
 			kind := upstream.Classify(status, string(respBody))
 			// 内容拦截误报（passthrough 模式首遇）：判定为 system 指纹误报，
@@ -617,24 +629,25 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if peek.Stream {
 			// 流式：透传结束后立即关闭上游 body，避免 defer 在轮转场景下堆积 fd。
 			st.status = http.StatusOK
-			stats := newChatStatsReaderSince(rc, st.start)
-			_ = upstream.Stream(w, stats)
-			recordAttempt(acct.UID, stats.Usage(), attemptStarted)
-			st.ttfb = stats.TTFB()
-			st.toks, _ = stats.Tokens()
+			// 局部名 cr（chat reader）而非 stats：后者已是本文件的包名（统计采集）。
+			cr := newChatStatsReaderSince(rc, st.start)
+			_ = upstream.Stream(w, cr)
+			recordAttempt(acct.UID, cr.Usage(), attemptStarted, false)
+			st.ttfb = cr.TTFB()
+			st.toks, _ = cr.Tokens()
 			rc.Close()
 			return
 		}
 		resp, err := upstream.Aggregate(rc)
 		rc.Close()
 		if err != nil {
-			recordAttempt(acct.UID, pool.TokenUsageDelta{}, attemptStarted)
+			recordAttempt(acct.UID, pool.TokenUsageDelta{}, attemptStarted, true)
 			// 上游流解析失败：客户端还没看到任何输出，回 502 并告知原因。
 			writeOpenAIError(w, http.StatusBadGateway, "upstream_parse", err.Error())
 			st.status = http.StatusBadGateway
 			return
 		}
-		recordAttempt(acct.UID, usageDeltaFromResponse(resp), attemptStarted)
+		recordAttempt(acct.UID, usageDeltaFromResponse(resp), attemptStarted, false)
 		writeJSON(w, http.StatusOK, resp)
 		st.status = http.StatusOK
 		st.toks = completionTokens(resp)

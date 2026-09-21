@@ -361,7 +361,8 @@ label.fld > .hint { display: block; font-size: 11px; color: var(--ink-3); margin
 .cred .n .of { color: var(--ink-3); font-size: 11px; }
 /* 量条走 dither：实心块之间留缝，读出像素颗粒感 */
 .bar { height: 8px; background: var(--bg); border: 1px solid var(--line); margin-top: 6px; overflow: hidden; max-width: 92px; }
-.bar i { display: block; height: 100%; background-image: repeating-linear-gradient(90deg, var(--accent) 0 3px, transparent 3px 5px); }
+/* transform-origin 左端：量条的生长动效走 scaleX（合成层动画，不触发重排）。 */
+.bar i { display: block; height: 100%; transform-origin: left; background-image: repeating-linear-gradient(90deg, var(--accent) 0 3px, transparent 3px 5px); }
 .tag {
   display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
   font-size: 10.5px; font-weight: 700; white-space: nowrap; letter-spacing: .05em;
@@ -387,6 +388,91 @@ label.fld > .hint { display: block; font-size: 11px; color: var(--ink-3); margin
 #logBox .ln { display: block; }
 #logBox .ln.e { color: var(--bad); }
 #logBox .ln.w { color: var(--warn); }
+
+/* ── 用量统计（消费计量）────────────────────────────────────────────
+   本页的签名元素是「消费节律」柱图：每根柱子由 3px/5px 的抖动块自下而上堆成
+   （与积分量条同一套纹理语言，只是把方向转成纵向），从 2px 基线往上长——读起来
+   像一台计量表，而不是圆角+渐变的通用图表。全页只有这一处用重手法，其余区块
+   沿用既有的观测条与表格语言。 */
+
+/* 累计头条：全页层级最高的一次观测。它与下方"区间"区块是两个数据源
+   （池内长期累计 vs 统计文件窗口），用 2px 线硬隔开并各自标注口径——
+   两个口径混在一处是这一页最容易误读的地方。
+   注：内层容器叫 .top 而不是 .main——.main 是壳层主区（flex-direction: column），
+   同名会让这里的横向排布被扭转成竖排且交叉轴右对齐。 */
+.hero { border: 2px solid var(--line); background: var(--surface); box-shadow: var(--shadow); margin-bottom: 18px; }
+.hero .top { display: flex; align-items: flex-end; gap: 30px; padding: 17px 19px 15px; flex-wrap: wrap; }
+.hero .big { display: flex; align-items: baseline; gap: 7px; }
+.hero .big b { font: 700 40px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--accent); }
+.hero .big i { font: 500 12px/1 var(--mono); font-style: normal; color: var(--ink-3); letter-spacing: .12em; }
+.hero .big .lb { font-size: 10.5px; color: var(--ink-3); letter-spacing: .1em; align-self: flex-end; padding-bottom: 3px; }
+/* 支撑读数推到右端：头条读作"左侧一个大数 + 右侧一组支撑值"的双锚点表头，
+   比全部挤在左边留出半行空白更像是刻意的版式。窄屏换行后取消右推，
+   否则第二行会被整体顶到右边。 */
+.hero .side { display: flex; gap: 26px; flex-wrap: wrap; margin-left: auto; }
+@media (max-width: 900px) { .hero .side { margin-left: 0; } }
+.hero .side .v { font: 700 15px/1.15 var(--mono); font-variant-numeric: tabular-nums; }
+.hero .side .k { font-size: 10.5px; color: var(--ink-3); letter-spacing: .08em; margin-top: 5px; }
+.hero .foot { padding: 9px 19px; border-top: 1px solid var(--line-soft); background: var(--surface-2); font-size: 11.5px; color: var(--ink-3); }
+
+/* 口径切换行：区间口径只作用于下面的观测条与图表；累计口径在头条里，互不干扰。 */
+.rngrow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.rngrow .note { color: var(--ink-3); font-size: 11.5px; }
+
+/* 图表：三行共用同一套 grid 轨道（auto-columns 1fr + 相同 gap），
+   柱、请求量细条、刻度标签因此天然对齐，无需测量像素。 */
+.chart { padding: 16px 16px 12px; }
+.plot, .strip, .scale { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; }
+/* 柱体与细条用百分比高度，故行高必须是确定值、且各自有满高的容体——
+   否则百分比高度回退成 auto，柱子会塌成 0。 */
+.plot { height: 196px; border-bottom: 2px solid var(--line); }
+.strip { height: 24px; margin-top: 3px; }
+.scale { margin-top: 6px; }
+.scale span {
+  font: 500 9.5px/1 var(--mono); color: var(--ink-3); text-align: center;
+  white-space: nowrap; overflow: hidden; letter-spacing: .04em;
+}
+.col, .col-r { height: 100%; display: flex; align-items: flex-end; }
+.col { cursor: crosshair; outline-offset: 2px; }
+/* 柱体用纵向抖动：实心块之间留 2px 缝，与积分量条（横向 3px/5px）同族。 */
+.col .fill {
+  width: 100%; height: var(--h);
+  background-image: repeating-linear-gradient(0deg, var(--accent) 0 3px, transparent 3px 5px);
+  transform-origin: bottom;
+}
+/* 零值柱留一条地面刻线：否则空档看起来像"没数据"，而它其实是"那天真的没有"。 */
+.col.zero .fill { height: 2px; background-image: none; background: var(--line); }
+.col:hover .fill, .col.on .fill { background-color: var(--accent-soft); }
+.col.on .fill { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+/* 峰值柱顶一道横杠：给整张图一个比例参照（无刻度柱图读不出量级）。 */
+.col.peak .fill { position: relative; }
+.col.peak .fill::after {
+  content: ""; position: absolute; left: -2px; right: -2px; top: -3px; height: 2px; background: var(--accent);
+}
+/* 请求量细条：同一时间轴上的第二变量（调用了多少次），用次级色阶，
+   不与 token 柱争视觉——它回答的是"什么时候被限流过"。 */
+.strip .r { width: 100%; height: var(--r); background: var(--ink-3); opacity: .72; min-height: 2px; }
+.strip .r.zero { background: var(--line); opacity: 1; height: 1px; }
+.chart .legend {
+  display: flex; align-items: center; gap: 16px; margin-top: 10px;
+  font-size: 10.5px; color: var(--ink-3); letter-spacing: .06em;
+}
+.chart .legend i { display: inline-block; width: 10px; height: 8px; margin-right: 5px; vertical-align: -1px; }
+.chart .legend .lg-tok i { background-image: repeating-linear-gradient(0deg, var(--accent) 0 3px, transparent 3px 5px); }
+.chart .legend .lg-req i { background: var(--ink-3); opacity: .72; }
+/* 仪表读数槽：悬停/聚焦某根柱子时在这里出该点的明细，读数固定在一处刷新——
+   像仪器的一个数字窗口，而不是跟着鼠标跑的浮层（浮层要处理边缘翻转，且会挡住图）。 */
+.readout { font: 700 11.5px/1.3 var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.readout b { color: var(--accent); }
+.readout .bad { color: var(--bad); }
+
+/* 排行两表并排（窄屏堆叠）：模型与账号，同一套 .acc 表格语言 + 积分列的抖动量条。 */
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+.duo > .box { margin-bottom: 0; }
+@media (max-width: 1000px) { .duo { grid-template-columns: 1fr; } }
+.duo .acc { min-width: 0; }
+.duo .acc th, .duo .acc td { padding: 8px 9px; }
+.duo .who { min-width: 0; }
 
 /* ── 配置表单 ─────────────────────────────────────────────────────── */
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
@@ -470,6 +556,9 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
       <li><a href="#accounts" data-view="accounts" class="on">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.6"/><path d="M2.8 13.5c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4"/></svg>
         账号池</a></li>
+      <li><a href="#stats" data-view="stats">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 13.5h12"/><path d="M4.2 13.5V8.6M8 13.5V4.2M11.8 13.5V6.8"/></svg>
+        用量统计</a></li>
       <li><a href="#taskscenter" data-view="taskscenter">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2.5h10v9H8l-3 3v-3H3z"/><path d="M6 6.5h4M6 9h2.5"/></svg>
         任务中心</a></li>
@@ -533,6 +622,82 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
           </tr></thead>
           <tbody id="accBody"></tbody>
         </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 用量统计 -->
+    <section class="view" id="view-stats" hidden>
+      <!-- 累计头条。口径是"自统计启用起"，与下方时间序列同一个聚合器，故上下永远自洽；
+           池的历史总账（统计功能上线之前，只有总数没有按日明细）降级在脚注里作参照。 -->
+      <div class="hero">
+        <div class="top">
+          <div class="big"><b id="ltTotal">-</b><i>tok</i><span class="lb">自统计启用起</span></div>
+          <div class="side">
+            <div><div class="v" id="ltPrompt">-</div><div class="k">输入 TOKEN</div></div>
+            <div><div class="v" id="ltCompletion">-</div><div class="k">输出 TOKEN</div></div>
+            <div><div class="v" id="ltRequests">-</div><div class="k">请求次数</div></div>
+            <div><div class="v" id="ltAccounts">-</div><div class="k">活跃账号</div></div>
+          </div>
+        </div>
+        <div class="foot" id="ltFoot">自账号首次请求起累计，不随统计保留窗口缩减</div>
+      </div>
+
+      <div class="rngrow">
+        <span class="chips" id="rngChips">
+          <button class="xs chip" data-rng="today">今日</button>
+          <button class="xs chip" data-rng="7d">近 7 天</button>
+          <button class="xs chip on" data-rng="30d">近 30 天</button>
+        </span>
+        <span class="note" id="rngNote"></span>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="v" id="stTotal">-</div><div class="k">区间 TOKEN</div></div>
+        <div class="stat"><div class="v" id="stPrompt">-</div><div class="k">输入 TOKEN</div></div>
+        <div class="stat"><div class="v" id="stCompletion">-</div><div class="k">输出 TOKEN</div></div>
+        <div class="stat"><div class="v" id="stRequests">-</div><div class="k">请求次数</div></div>
+        <div class="stat" id="stFailCell"><div class="v" id="stFailed">-</div><div class="k" id="stFailK">失败</div></div>
+        <div class="stat good"><div class="v" id="stRate">-</div><div class="k">平均速率</div></div>
+      </div>
+
+      <div class="box">
+        <header>
+          <h3>消费节律</h3>
+          <span class="grow"></span>
+          <span class="readout" id="chartReadout">—</span>
+        </header>
+        <div class="chart">
+          <div class="plot" id="chartPlot"></div>
+          <div class="strip" id="chartStrip"></div>
+          <div class="scale" id="chartScale"></div>
+          <div class="legend">
+            <span class="lg-tok"><i></i>token 用量</span>
+            <span class="lg-req"><i></i>请求次数</span>
+            <span class="grow" style="flex:1"></span>
+            <span id="chartUnit">按自然日（CST）</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="duo">
+        <div class="box">
+          <header><h3>模型分布</h3><span class="grow"></span><span class="note" id="mdStatNote"></span></header>
+          <div class="tbl-wrap">
+            <table class="acc md">
+              <thead><tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>TOKEN</th><th>占比</th><th>请求</th><th>输入 / 输出</th></tr></thead>
+              <tbody id="mdStatBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="box">
+          <header><h3>账号用量</h3><span class="grow"></span><span class="note" id="acStatNote"></span></header>
+          <div class="tbl-wrap">
+            <table class="acc md">
+              <thead><tr><th class="mark" aria-hidden="true"></th><th>账号</th><th>TOKEN</th><th>占比</th><th>请求</th><th>失败</th></tr></thead>
+              <tbody id="acStatBody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
@@ -730,7 +895,15 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
               <input type="checkbox" name="sanitize_blacklist_fingerprints"></div>
             <div class="switch"><span class="lb">会话粘性路由</span>
               <input type="checkbox" name="session_sticky_enabled"></div>
-            <div class="hint" style="margin-top:10px">Upstash Redis 镜像、凭证目录与状态文件路径需手工编辑配置文件（判为重启项）。</div>
+            <div class="hr"></div>
+            <div class="grid2">
+              <div class="switch"><span class="lb">按天用量统计</span>
+                <input type="checkbox" name="stats_enabled"></div>
+              <label class="fld"><span class="lb">统计保留天数</span>
+                <input name="stats_keep_days" type="number" min="1" placeholder="30">
+                <span class="hint">改动需重启进程</span></label>
+            </div>
+            <div class="hint" style="margin-top:10px">统计按自然日聚合并落盘，供「用量统计」页出趋势与排行；落盘路径默认与状态文件同目录（手工编辑配置文件可改）。</div>
           </div>
         </div>
 

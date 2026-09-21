@@ -26,6 +26,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/server"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/stats"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
@@ -78,6 +79,16 @@ func main() {
 	p.SetMaxInFlight(cfg.Pool.MaxInFlight)
 	p.SetSoftRateMax(cfg.SoftRateMaxDur) // 软冷却指数退避封顶（soft_rate_max，默认 2h）
 	p.SetWeights(cfg.Pool.IdleWeightPerHour, cfg.Pool.IdleWeightMax)
+
+	// 用量统计（按天聚合的 token 时间序列，面板统计页的数据源）。
+	// enabled=false 时不构造：handler 与面板都拿到 nil，对应接口返回 501，
+	// 账号级累计（state.json 的 token_usage）不受影响。
+	var statsRec *stats.Recorder
+	if cfg.Stats.Enabled {
+		statsRec = stats.New(cfg.Stats.File, cfg.Stats.KeepDays)
+		defer statsRec.Close() // 进程退出前停 flusher + 补最后一次落盘
+		log.Printf("stats: 用量统计启用，保留 %d 天，落盘 %s", cfg.Stats.KeepDays, cfg.Stats.File)
+	}
 
 	// 会话粘性路由（可配关闭）。
 	var sessRouter *session.Router
@@ -204,6 +215,7 @@ func main() {
 		StickyCount: sessCount,
 		Version:     appVersion,
 		Live:        live,
+		Stats:       statsRec,
 		ConfigPath:  *cfgPath,
 		LoadConfig: func() (any, error) {
 			return Load(*cfgPath)
@@ -225,6 +237,7 @@ func main() {
 		SoftCooldown: cfg.SoftRateDur,
 		Panel:        pn,
 		Live:         live,
+		Stats:        statsRec,
 		PromptMode:   cfg.Prompt.Mode,
 		PromptText:   cfg.PromptText,
 		// handler 侧第三道闸（global realm）：false（显式逃生门）时不列 global: 模型名。
@@ -362,6 +375,8 @@ func restartRequiredFields(c *Config) []string {
 		out = append(out, "upstash")
 	}
 	out = append(out, "session_sticky.ttl", "session_sticky.gc_interval")
+	// 统计聚合器在启动期构造（保留窗口与落盘路径被 Recorder 捕获），三项都要重启。
+	out = append(out, "stats.enabled", "stats.keep_days", "stats.file")
 	return out
 }
 

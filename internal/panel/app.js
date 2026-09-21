@@ -10,6 +10,11 @@ let view = 'accounts';
 let cfgLoaded = null;
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
+// 统计页状态提到顶层：首屏直接以 #stats 进入时 go() 会立刻调用 loadStats，
+// 若声明在文件后段（let 不提升）会撞上暂时性死区。
+let statsRng = '30d', statsData = null, statsPainted = false;
+// 图表当前的点位与峰值：读数槽、悬停高亮、错误降级态都要读这几个。
+let chartPts = [], chartPeak = null, chartPeakIdx = -1;
 
 const $ = id => document.getElementById(id);
 
@@ -79,24 +84,24 @@ function dur(sec) {
   return h ? h + '时' + String(m).padStart(2, '0') + '分' : m ? m + '分' + String(s).padStart(2, '0') + '秒' : s + '秒';
 }
 
+// formatTokenCount 中文数量级：万 / 亿 / 万亿（步进 1e4，与国内读数习惯一致）。
+// 一万以下走千分位；四舍五入后越界就升级单位，避免出现"10000万"这种写法。
+// 注：原先是 k/m/b，与账号池的用量列共用这一个口径，两处一起变成中文单位。
 function formatTokenCount(tokens) {
   if (tokens == null || tokens === '') return '—';
   const n = Number(tokens);
   if (!Number.isFinite(n) || n < 0) return '—';
-  if (n < 1000) return String(Math.round(n));
-  const units = [['k', 1e3], ['m', 1e6], ['b', 1e9]];
+  if (n < 1e4) return formatInt(n);
+  const units = [['万', 1e4], ['亿', 1e8], ['万亿', 1e12]];
   let unit = units[0];
   for (const candidate of units) {
     if (n >= candidate[1]) unit = candidate;
   }
-  let value = n / unit[1];
-  let rounded = Number(value.toFixed(1));
-  // 999999 → 1m，而不是 1000k；四舍五入后自动升级单位。
+  let rounded = Number((n / unit[1]).toFixed(1));
   const next = units[units.indexOf(unit) + 1];
-  if (next && rounded >= 1000) {
+  if (next && rounded >= 1e4) {
     unit = next;
-    value = n / unit[1];
-    rounded = Number(value.toFixed(1));
+    rounded = Number((n / unit[1]).toFixed(1));
   }
   return rounded + unit[0];
 }
@@ -130,7 +135,7 @@ $('btnKey').onclick = async () => {
 $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnKey').click(); });
 
 /* ── 路由 ─────────────────────────────────────────────────────────── */
-const TITLES = { accounts: '账号池', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志' };
+const TITLES = { accounts: '账号池', stats: '用量统计', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志' };
 function go(v) {
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
@@ -139,6 +144,9 @@ function go(v) {
   if (v === 'models' && !$('mdBody').children.length) loadModels();
   if (v === 'config') loadConfig();
   if (v === 'logs') loadLogs();
+  // 统计页每次进入都重取一次并重播入场动效：离开这一页期间攒下的量，
+  // 回来时应该看到"涨了"，而不是上一轮的静止画面。
+  if (v === 'stats') { statsPainted = false; loadStats(true); }
   if (v === 'taskscenter') { loadSchoolStatus(true); pollQueueOnce(); }
 }
 document.querySelectorAll('.nav a').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); history.replaceState(null, '', '#' + a.dataset.view); });
@@ -338,6 +346,376 @@ $('btnLogPin').onclick = () => {
   $('btnLogPin').textContent = '自动滚动：' + (logPin ? '开' : '关');
 };
 
+/* ── 用量统计 ─────────────────────────────────────────────────────── */
+/* 动效策略（一次编排，而非散落的过渡）：
+   - 只动 transform / opacity / 数字，不碰 width/height/top：不触发重排；
+   - 只在首次绘制、切换口径、重新进入本页时播放：5s 的静默刷新只更新数值，
+     否则画面每 5 秒抖一次，读表的人会被自己的面板烦到；
+   - prefers-reduced-motion 下直接落终态：CSS 里那条媒体查询只关得住 transition
+     与 animation，关不住这里的 rAF 补间，必须显式判一次。 */
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const easeOut = p => 1 - Math.pow(1 - p, 3);
+
+// FMT 数值格式化表：数字滚动与静态渲染共用同一套口径，避免两处写法漂移。
+// 只列统计页真正会滚动的几种量（耗时没有滚动展示位，故不收在这里）。
+const FMT = {
+  tok: formatTokenCount,
+  int: formatInt,
+  rate: v => (Number(v) || 0).toFixed(1) + ' tok/s',
+};
+
+// formatInt 千分位。请求次数动辄四位数，裸数字读不出量级；token 在"万"以下也复用它，
+// 免得同一行里出现 "5,948 次" 与 "5948" 两种写法。
+function formatInt(n) {
+  n = Math.round(Number(n) || 0);
+  return n >= 1000 ? n.toLocaleString('en-US') : String(n);
+}
+
+// tween 进度补间：fn 收缓动后的 0..1。起点恒为 0 而不读元素当前值——
+// 重复触发时起点不会漂移（"从当前值开始"会让连点后的动画越缩越短）。
+function tween(dur, fn, done) {
+  if (reduceMotion.matches) { fn(1); if (done) done(); return; }
+  const t0 = performance.now();
+  const step = now => {
+    const p = Math.min(1, (now - t0) / dur);
+    fn(easeOut(p));
+    if (p < 1) requestAnimationFrame(step); else if (done) done();
+  };
+  requestAnimationFrame(step);
+}
+
+// staggerTween 对 n 个目标错峰补间：第 i 个延后 i*gap 开始、各跑 dur。
+// 末尾强制补一帧 local=1：否则最后一帧可能停在 0.98，柱子就"差一点长不到顶"。
+function staggerTween(n, dur, gap, fn, done) {
+  if (n <= 0) { if (done) done(); return; }
+  if (reduceMotion.matches) { for (let i = 0; i < n; i++) fn(i, 1); if (done) done(); return; }
+  const total = dur + gap * (n - 1);
+  const t0 = performance.now();
+  const step = now => {
+    const el = now - t0;
+    if (el >= total) { for (let i = 0; i < n; i++) fn(i, 1); if (done) done(); return; }
+    for (let i = 0; i < n; i++) fn(i, easeOut(Math.max(0, Math.min(1, (el - i * gap) / dur))));
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// timeline 串行执行各段（段形如 (done) => void）。编排集中在一处，
+// 避免散落的 setTimeout 互相打架。
+function timeline(steps) {
+  const run = i => { if (i < steps.length) steps[i](() => run(i + 1)); };
+  run(0);
+}
+
+// mdOf 日期键 "2026-09-18" → "09-18"（轴上只留月日，年份对近 30 天无信息量）。
+function mdOf(day) { return String(day).slice(5); }
+
+// setNum 落终态并把目标值记在 dataset 上：入场动效据此从 0 滚到目标，
+// 静默刷新只需重新调用本函数。
+function setNum(el, value, fmt) {
+  const to = Number(value) || 0;
+  el.dataset.to = String(to);
+  el.dataset.fmt = fmt;
+  el.textContent = FMT[fmt](to);
+}
+
+// syncRangeChips 口径按钮的选中态以 statsRng 为唯一来源。HTML 里预置的 .on 只是
+// 无 JS 时的兜底外观——两处各写一份默认值迟早会漂移（改了 JS 默认值却忘了改 HTML，
+// 页面就会出现"高亮着 30 天、数据却是今日"的错位）。
+function syncRangeChips() {
+  document.querySelectorAll('#rngChips .chip').forEach(c => c.classList.toggle('on', c.dataset.rng === statsRng));
+}
+
+$('rngChips').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-rng]');
+  if (!b || b.dataset.rng === statsRng) return;
+  statsRng = b.dataset.rng;
+  syncRangeChips();
+  statsPainted = false; // 换口径 = 换内容，值得重播一次入场
+  loadStats(false);
+});
+syncRangeChips();
+
+async function loadStats(quiet) {
+  try {
+    const d = await api('stats?range=' + encodeURIComponent(statsRng));
+    statsData = d;
+    renderStats(d, !statsPainted);
+    statsPainted = true;
+  } catch (e) {
+    // 501（统计被 config 关掉）与网络错误都走这里：把话说在读数槽与空表里，
+    // 而不是留一页"看着正常但一个数字都没有"的假象。
+    statsUnavailable(e.message);
+    if (!quiet) toast(e.message, 'err');
+  }
+}
+
+// lifetimeFootnote 头条脚注：说清"这个数是哪段时间的"，并把池的历史总账作为
+// 参照附上。两个口径的差别（有无按日明细）必须写在脸上——此前只标了口径名，
+// 用户第一眼仍读成"顶部有数、下面全空 = 页面坏了"。
+function lifetimeFootnote(ss, pt) {
+  const hist = pt.total_tokens > 0
+    ? '；账号历史总账 ' + formatTokenCount(pt.total_tokens) + '（统计启用前，无按日明细）'
+    : '';
+  return ss.since
+    ? '自 ' + mdOf(ss.since) + ' 起累计（' + (ss.active_accounts || 0) + ' 个账号），不随统计保留窗口缩减' + hist
+    : '尚未统计到请求：网关首次转发后开始累积' + hist;
+}
+
+// statsUnavailable 统计取不到时的整页降级态。
+function statsUnavailable(msg) {
+  for (const id of ['ltTotal', 'ltPrompt', 'ltCompletion', 'ltRequests', 'ltAccounts',
+    'stTotal', 'stPrompt', 'stCompletion', 'stRequests', 'stFailed', 'stRate']) {
+    const el = $(id);
+    el.textContent = '—';
+    delete el.dataset.to;
+  }
+  // 图表状态一并清空：否则鼠标移出图表区触发的 selectPoint(-1) 会用上一轮的峰值
+  // 覆写掉这里的错误提示，用户看到的就是"报错一闪而过，变成一组旧数字"。
+  chartPts = [];
+  chartPeak = null;
+  chartPeakIdx = -1;
+  $('stFailCell').className = 'stat';
+  $('stFailK').textContent = '失败';
+  $('chartReadout').textContent = msg;
+  $('chartPlot').innerHTML = '';
+  $('chartStrip').innerHTML = '';
+  $('chartScale').innerHTML = '';
+  $('chartUnit').textContent = '';
+  $('rngNote').textContent = '';
+  $('mdStatNote').textContent = '';
+  $('acStatNote').textContent = '';
+  const row = '<tr><td colspan="6"><div class="empty"><div class="big">统计不可用</div>' + esc(msg) + '</div></td></tr>';
+  $('mdStatBody').innerHTML = row;
+  $('acStatBody').innerHTML = row;
+}
+
+function renderStats(d, animate) {
+  const t = d.totals || {}, ss = d.since_start || {}, pt = d.pool_total || {};
+
+  /* 累计头条：口径是"自统计启用起"，与下方时间序列同一个聚合器——头条与区间因此
+     永远自洽，不会出现"上面有数、下面全空"的观感。
+     池的历史总账（含统计功能上线之前的部分）降级进脚注：它只有总数、没有按日明细，
+     摆成头条只会让人以为页面自相矛盾。 */
+  setNum($('ltTotal'), ss.total_tokens, 'tok');
+  setNum($('ltPrompt'), ss.prompt_tokens, 'tok');
+  setNum($('ltCompletion'), ss.completion_tokens, 'tok');
+  setNum($('ltRequests'), ss.requests, 'int');
+  setNum($('ltAccounts'), ss.active_accounts, 'int');
+  $('ltFoot').textContent = lifetimeFootnote(ss, pt);
+
+  /* 区间观测条。 */
+  const reqs = t.requests || 0, failed = t.failed || 0;
+  setNum($('stTotal'), t.total_tokens, 'tok');
+  setNum($('stPrompt'), t.prompt_tokens, 'tok');
+  setNum($('stCompletion'), t.completion_tokens, 'tok');
+  setNum($('stRequests'), reqs, 'int');
+  setNum($('stFailed'), failed, 'int');
+  // 平均速率：区间聚合吞吐（生成 token / 累计耗时），无数据时显示 "—"。
+  if (t.avg_tokens_per_sec > 0) setNum($('stRate'), t.avg_tokens_per_sec, 'rate');
+  else { $('stRate').textContent = '—'; delete $('stRate').dataset.to; }
+  $('stFailCell').className = 'stat' + (failed > 0 ? ' bad' : '');
+  $('stFailK').textContent = failed > 0 && reqs > 0
+    ? '失败 · 成功率 ' + (t.success_rate * 100).toFixed(1) + '%'
+    : '失败';
+
+  /* 口径说明：统计文件实际覆盖到哪一段，说清楚而不是让用户猜"为什么只有两天数据"。
+     覆盖度按"天"计（Days/Covered 都是日粒度）——写"小时"会让今日视图读成
+     "覆盖 1 / 1 小时"，那是柱子的粒度，不是覆盖范围。 */
+  const notes = [];
+  if (d.first_day) notes.push('统计自 ' + mdOf(d.first_day) + ' 起');
+  notes.push('覆盖 ' + (d.covered_days || 0) + ' / ' + (d.days || 0) + ' 天');
+  if (d.keep_days) notes.push('保留 ' + d.keep_days + ' 天');
+  $('rngNote').textContent = notes.join(' · ');
+
+  renderChart(d, animate);
+  renderStatTables(d);
+  $('chartUnit').textContent = (d.unit === 'hour' ? '按小时（CST）' : '按自然日（CST）')
+    + (chartPeak ? ' · 峰值 ' + formatTokenCount(chartPeak.tokens) + ' @ ' + chartPeak.label : '');
+
+  if (animate) playStatsIntro();
+}
+
+// chartPeak 当前图上的峰值点（给整张图一个量级参照，无刻度的柱图读不出大小）。
+// 状态本身声明在文件顶部的状态区，这里只消费。
+function renderChart(d, animate) {
+  const pts = d.series || [];
+  const plot = $('chartPlot'), strip = $('chartStrip'), scale = $('chartScale');
+  chartPts = pts;
+  chartPeak = null;
+  const maxT = Math.max(1, ...pts.map(p => p.total_tokens || 0));
+  const maxR = Math.max(1, ...pts.map(p => p.requests || 0));
+
+  chartPeakIdx = -1;
+  pts.forEach((p, i) => {
+    if ((p.total_tokens || 0) > 0 && (chartPeakIdx < 0 || p.total_tokens > pts[chartPeakIdx].total_tokens)) chartPeakIdx = i;
+  });
+  if (chartPeakIdx >= 0) {
+    const pk = pts[chartPeakIdx];
+    chartPeak = {
+      tokens: pk.total_tokens,
+      label: d.unit === 'hour' ? pk.key + ' 时' : mdOf(pk.key),
+    };
+  }
+
+  plot.innerHTML = pts.map((p, i) => {
+    const tok = p.total_tokens || 0;
+    const h = tok > 0 ? Math.max(3, Math.round(tok / maxT * 100)) : 0;
+    const cls = 'col' + (tok > 0 ? '' : ' zero') + (i === chartPeakIdx ? ' peak' : '');
+    return '<div class="' + cls + '" data-i="' + i + '" tabindex="0" aria-label="' +
+      esc(pointSegs(d, i).join(' · ')) + '" style="--h:' + h + '%"><i class="fill"></i></div>';
+  }).join('');
+
+  strip.innerHTML = pts.map(p => {
+    const r = p.requests || 0;
+    const h = r > 0 ? Math.max(8, Math.round(r / maxR * 100)) : 0;
+    return '<div class="col-r"><i class="r' + (r > 0 ? '' : ' zero') + '" style="--r:' + h + '%"></i></div>';
+  }).join('');
+
+  // 刻度：按列数取约 7 个位置（24 小时取每 3 小时）。末尾必标，但若离前一个标签
+  // 太近就跳过它——窄屏上两个标签贴在一起比少一个标签难读得多。
+  const n = pts.length;
+  const step = n > 12 ? Math.ceil(n / 7) : 1;
+  scale.innerHTML = pts.map((p, i) => {
+    const label = d.unit === 'hour' ? p.key : mdOf(p.key);
+    if (i === n - 1) return '<span>' + esc(label) + '</span>';
+    if (i % step || (n - 1 - i) < step * 0.6) return '<span></span>';
+    return '<span>' + esc(label) + '</span>';
+  }).join('');
+
+  // 入场起点：柱体与量条先压到 0（在首帧渲染前设好，避免"先满高再缩回"的闪跳）。
+  const fills = plot.querySelectorAll('.fill');
+  if (animate) fills.forEach(f => f.style.transform = 'scaleY(0)');
+
+  // 空序列（range=all 且统计文件里还没有任何一天）与"整区间零请求"（刚上线、还没流量）
+  // 都要显式写空态：前者 selectPoint 会提前返回留下上一轮读数，后者会显示某一天的
+  // "无请求"——都没回答"这一页为什么是空的"。
+  const hasAny = pts.some(p => (p.requests || 0) > 0);
+  if (!pts.length) $('chartReadout').textContent = '统计区间内还没有记录';
+  else if (!hasAny) $('chartReadout').textContent = '区间内还没有请求记录（网关首次转发后开始累积）';
+  else selectPoint(-1);
+}
+
+// pointSegs 某个时间点的明细分段（读数槽、柱子 aria-label、空态共用一套取数）。
+function pointSegs(d, i) {
+  const p = (d.series || [])[i];
+  if (!p) return ['—'];
+  const label = d.unit === 'hour' ? p.key + ' 时' : mdOf(p.key);
+  if (!p.requests) return [label, '无请求'];
+  const seg = [label, formatTokenCount(p.total_tokens) + ' tok', formatInt(p.requests) + ' 次'];
+  if (p.failed) seg.push('失败 ' + formatInt(p.failed));
+  return seg;
+}
+
+// pointReadout 读数槽用的 HTML：token 数值与失败数是这一段里唯一需要抢眼的两个值。
+function pointReadout(d, i) {
+  const seg = pointSegs(d, i);
+  if (seg.length > 2) seg[1] = '<b>' + seg[1].replace(/ tok$/, '') + '</b> tok';
+  if (seg[seg.length - 1].startsWith('失败')) {
+    seg[seg.length - 1] = '<span class="bad">' + seg[seg.length - 1] + '</span>';
+  }
+  return seg.join(' · ');
+}
+
+// selectPoint 高亮第 i 个点并刷新读数槽；i < 0 回到峰值点（图上永远有一个读数）。
+function selectPoint(i) {
+  $('chartPlot').querySelectorAll('.col').forEach(c => c.classList.toggle('on', Number(c.dataset.i) === i));
+  if (!chartPts.length) return;
+  $('chartReadout').innerHTML = pointReadout(statsData, i >= 0 ? i : Math.max(0, chartPeakIdx));
+}
+$('chartPlot').addEventListener('mouseover', ev => {
+  const c = ev.target.closest('.col');
+  if (c) selectPoint(Number(c.dataset.i));
+});
+$('chartPlot').addEventListener('mouseleave', () => selectPoint(-1));
+$('chartPlot').addEventListener('focusin', ev => {
+  const c = ev.target.closest('.col');
+  if (c) selectPoint(Number(c.dataset.i));
+});
+$('chartPlot').addEventListener('focusout', () => selectPoint(-1));
+
+// paintStatFinals 把所有观测数字落回 dataset 里记录的目标值。setNum 渲染时已经写过
+// 一次终态，这里是给动效兜底用的（见 playStatsIntro 的定时器）。
+function paintStatFinals() {
+  for (const el of statNumEls()) {
+    if (el.dataset.to != null) el.textContent = FMT[el.dataset.fmt](Number(el.dataset.to));
+  }
+}
+
+// statNumEls 统计页上参与"滚动"的数字（观测条 + 累计头条），其余表格数字不参与
+// 动效——表格每 5 秒重绘一次，跟着跳数字会让人没法读。
+function statNumEls() {
+  return [...$('view-stats').querySelectorAll('.stat .v')]
+    .concat([$('ltTotal'), $('ltPrompt'), $('ltCompletion'), $('ltRequests'), $('ltAccounts')]);
+}
+
+// playStatsIntro 入场编排：读数先滚起来，柱图与量条随后生长（两处并行，各占一片区域）。
+let statsIntroToken = 0;
+function playStatsIntro() {
+  const token = ++statsIntroToken;
+  const nums = statNumEls().filter(el => el.dataset.to != null);
+  const fills = [...$('chartPlot').querySelectorAll('.fill')];
+  const bars = [...$('view-stats').querySelectorAll('.bar i')];
+  // 量条从 0 开始长：起始状态在首帧前设好。
+  bars.forEach(b => b.style.transform = 'scaleX(0)');
+
+  timeline([
+    done => tween(420, p => {
+      if (token !== statsIntroToken) { done(); return; } // 已被新一轮渲染接管：别再写旧值
+      for (const el of nums) el.textContent = FMT[el.dataset.fmt](Number(el.dataset.to) * p);
+    }, done),
+    done => {
+      // 两处并行：柱图在左、量条在右，同时启动比串行更利落；全部结束才推进下一段。
+      let left = 2;
+      const fin = () => { if (--left === 0) done(); };
+      // 30 根柱子若每根错峰 16ms 会拖到 740ms，故把总错峰压到 ≈260ms 以内。
+      const gap = fills.length > 1 ? Math.min(16, 260 / (fills.length - 1)) : 0;
+      staggerTween(fills.length, 280, gap, (i, p) => { fills[i].style.transform = 'scaleY(' + p + ')'; }, fin);
+      staggerTween(bars.length, 320, 26, (i, p) => { bars[i].style.transform = 'scaleX(' + p + ')'; }, fin);
+    },
+  ]);
+
+  // 兜底落终态：rAF 在后台标签页与被截图的浏览器里会被暂停，补间可能永久停在中间值上，
+  // 页面就会显示"错的数字"（889.2m 而真值是 1.1b）——统计页宁可不动效也不能停错数。
+  // 目标值取自 dataset（每轮渲染都会刷新），故晚到的兜底写入不会写回过期数据。
+  setTimeout(() => { if (token === statsIntroToken) paintStatFinals(); }, 1600);
+}
+
+// renderStatTables 模型分布与账号用量两张排行表（同一套 .acc 表格语言，
+// 占比列复用账号表的抖动量条）。
+// token 字段一律走 `|| 0`：聚合桶的 json tag 带 omitempty（落盘体积所必需），
+// 零值字段在报文里是缺键而不是 0，直接交给 formatTokenCount 会渲染成 "—"。
+function renderStatTables(d) {
+  const models = d.by_model || [];
+  const accounts = d.by_account || [];
+  $('mdStatBody').innerHTML = models.length ? models.map(m => {
+    const pct = Math.round((m.share || 0) * 1000) / 10;
+    return '<tr><td class="mark" aria-hidden="true"></td>' +
+      '<td class="who"><div class="nm">' + esc(m.key) + '</div></td>' +
+      '<td class="num">' + formatTokenCount(m.total_tokens || 0) + '</td>' +
+      '<td class="cred" title="占区间总量 ' + pct + '%"><div class="n">' + pct + '%</div>' +
+      '<div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
+      '<td class="num">' + formatInt(m.requests) + '</td>' +
+      '<td class="num" style="color:var(--ink-3)">' + formatTokenCount(m.prompt_tokens || 0) + ' / ' + formatTokenCount(m.completion_tokens || 0) + '</td></tr>';
+  }).join('') : '<tr><td colspan="6"><div class="empty">区间内没有调用记录</div></td></tr>';
+  $('mdStatNote').textContent = models.length ? models.length + ' 个模型' : '';
+
+  $('acStatBody').innerHTML = accounts.length ? accounts.map(a => {
+    const pct = Math.round((a.share || 0) * 1000) / 10;
+    const name = a.label ? esc(a.label) : '<span style="color:var(--ink-3)">未命名</span>';
+    const short = a.key.length > 16 ? a.key.slice(0, 16) + '…' : a.key;
+    return '<tr><td class="mark" aria-hidden="true"></td>' +
+      '<td class="who" title="uid: ' + esc(a.key) + '"><div class="nm">' + name + '</div>' +
+      '<div class="id">' + esc(short) + '</div></td>' +
+      '<td class="num">' + formatTokenCount(a.total_tokens || 0) + '</td>' +
+      '<td class="cred" title="占区间总量 ' + pct + '%"><div class="n">' + pct + '%</div>' +
+      '<div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
+      '<td class="num">' + formatInt(a.requests) + '</td>' +
+      '<td class="num" style="color:' + (a.failed ? 'var(--bad)' : 'var(--ink-3)') + '">' + formatInt(a.failed) + '</td></tr>';
+  }).join('') : '<tr><td colspan="6"><div class="empty">区间内没有调用记录</div></td></tr>';
+  $('acStatNote').textContent = accounts.length ? accounts.length + ' 个账号' : '';
+}
+
 /* ── 配置 ─────────────────────────────────────────────────────────── */
 const CFG_MAP = {
   listen: ['listen'], api_key: ['api_key'],
@@ -357,6 +735,7 @@ const CFG_MAP = {
   prompt_mode: ['prompt', 'mode'], prompt_file: ['prompt', 'file'],
   sanitize_blacklist_fingerprints: ['features', 'sanitize_blacklist_fingerprints'],
   session_sticky_enabled: ['session_sticky', 'enabled'],
+  stats_enabled: ['stats', 'enabled'], stats_keep_days: ['stats', 'keep_days'],
 };
 function dig(obj, path) { return path.reduce((o, k) => (o == null ? undefined : o[k]), obj); }
 function put(obj, path, val) {
@@ -498,6 +877,7 @@ $('btnRefresh').onclick = async () => {
 function refreshVisible() {
   if (view === 'accounts') loadOverview(true);
   else if (view === 'logs') loadLogs();
+  else if (view === 'stats') loadStats(true);
   else if (view === 'taskscenter') pollQueueOnce();
 }
 function start() {

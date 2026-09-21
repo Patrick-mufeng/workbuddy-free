@@ -46,6 +46,9 @@ docs/
 
 # Windows binaries（*.exe 兜底覆盖 cmd/* 全部产物，避免新增子命令时再漏）
 *.exe
+# 网关运行中重编时，Go 会把被锁住的旧镜像改名成 *.exe~ 再写新文件——
+# 那是 10MB 级的二进制备份，别让它混进提交。
+*.exe~
 /wb2api.exe
 /login.exe
 /credit.exe

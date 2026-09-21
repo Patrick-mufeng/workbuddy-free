@@ -65,5 +65,10 @@
     "enabled": true,
     "ttl": "30m",
     "gc_interval": "5m"
+  },
+  "stats": {
+    "enabled": true,
+    "keep_days": 30,
+    "file": ""
   }
 }

@@ -47,6 +47,55 @@ func TestEnvOverride(t *testing.T) {
 	}
 }
 
+// 统计段缺省：老 config.json 没有 stats 键时必须是"开启 + 保留 30 天"，
+// 且落盘路径派生到 state_file 同目录（备份/迁移只拷一个目录）。
+func TestStatsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "c.json")
+	os.WriteFile(fp, []byte(`{"state_file":"./data/state.json"}`), 0o600)
+	c, err := Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Stats.Enabled {
+		t.Error("stats.enabled 缺省应为 true")
+	}
+	if c.Stats.KeepDays != 30 {
+		t.Errorf("stats.keep_days=%d want 30", c.Stats.KeepDays)
+	}
+	if c.Stats.File != filepath.Join("data", "stats.json") {
+		t.Errorf("stats.file=%q want data/stats.json（派生自 state_file 目录）", c.Stats.File)
+	}
+}
+
+// 显式配置的路径与窗口不被默认值覆盖。
+func TestStatsExplicitConfig(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "c.json")
+	os.WriteFile(fp, []byte(`{"stats":{"enabled":false,"keep_days":7,"file":"/tmp/s.json"}}`), 0o600)
+	c, err := Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Stats.Enabled {
+		t.Error("显式 false 应生效")
+	}
+	if c.Stats.KeepDays != 7 || c.Stats.File != "/tmp/s.json" {
+		t.Errorf("stats=%+v", c.Stats)
+	}
+}
+
+// keep_days <= 0 是非法配置，fail fast 而不是静默回落 30——
+// 静默回落会让用户以为窗口已调窄，实际还在攒 30 天。
+func TestStatsBadKeepDays(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "c.json")
+	os.WriteFile(fp, []byte(`{"stats":{"keep_days":0}}`), 0o600)
+	if _, err := Load(fp); err == nil {
+		t.Fatal("keep_days=0 应报错")
+	}
+}
+
 func TestBadDuration(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")

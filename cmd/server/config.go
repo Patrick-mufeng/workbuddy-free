@@ -148,6 +148,18 @@ type Config struct {
 		GCInterval string `json:"gc_interval"` // 会话 GC 周期，默认 "5m"
 	} `json:"session_sticky"`
 
+	Stats struct {
+		// Enabled 用量统计开关（缺省 true）。关掉后 /panel/api/stats 返回 501，
+		// 账号级累计（state.json 的 token_usage）不受影响——那部分始终在记。
+		Enabled bool `json:"enabled"`
+		// KeepDays 按天聚合的保留窗口，默认 30。窗口外的日子在跨日时淘汰，
+		// 落盘体积因此有界（30 天 × 模型数 只有几十 KB）。
+		KeepDays int `json:"keep_days"`
+		// File 统计落盘路径；空 = 与 state_file 同目录的 stats.json
+		// （统计与账号状态放一起，备份/迁移只需拷一个目录）。
+		File string `json:"file"`
+	} `json:"stats"`
+
 	// 解析后
 	SoftRateDur            time.Duration `json:"-"`
 	SoftRateMaxDur         time.Duration `json:"-"`
@@ -203,6 +215,8 @@ func Default() *Config {
 	c.SessionSticky.Enabled = true
 	c.SessionSticky.TTL = "30m"
 	c.SessionSticky.GCInterval = "5m"
+	c.Stats.Enabled = true
+	c.Stats.KeepDays = 30
 	return c
 }
 
@@ -395,6 +409,19 @@ func (c *Config) normalize() error {
 		if c.ExpiringSoonDur, err = time.ParseDuration(c.Pool.ExpiringSoon); err != nil {
 			return fmt.Errorf("pool.expiring_soon: %w", err)
 		}
+	}
+	// 统计保留窗口：0/负数视为非法配置 → fail fast（静默回落会让用户以为调窄了窗口，
+	// 实际还在攒 30 天；与 max_body_mb 同一处理风格）。
+	if c.Stats.KeepDays <= 0 {
+		return fmt.Errorf("stats.keep_days: %d 非法（需为正整数，单位天）", c.Stats.KeepDays)
+	}
+	if c.Stats.File == "" {
+		// 缺省与 state_file 同目录：统计与账号状态同处一地，备份/迁移只需拷一个目录。
+		dir := filepath.Dir(c.StateFile)
+		if dir == "" || dir == "." {
+			dir = "data"
+		}
+		c.Stats.File = filepath.Join(dir, "stats.json")
 	}
 	if c.Pool.BreakerThreshold <= 0 {
 		c.Pool.BreakerThreshold = 3
