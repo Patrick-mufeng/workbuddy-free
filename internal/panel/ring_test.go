@@ -16,7 +16,7 @@ func TestClassifyLine(t *testing.T) {
 		"panel: 任务动作 uid=x code=chat_5":                                 ChTask,
 		"panel: 队列启动：6 项（并发 2）":                                         ChTask,
 		"panel: revive uid=x":                                           ChSys,
-		"workbuddy-free listening on :7863":                             ChSys,
+		"workbuddy-free listening on :3012":                             ChSys,
 		"scheduler: 余额后台刷新每 5m0s":                                       ChSys,
 	}
 	for line, want := range cases {

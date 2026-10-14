@@ -14,7 +14,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
     ports:
-      - "7863:7863"
+      - "3012:3012"
     volumes:
       - ./auths:/app/auths
       - ./data:/app/data

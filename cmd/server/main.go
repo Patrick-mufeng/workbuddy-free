@@ -278,7 +278,7 @@ func main() {
 }
 
 // panelListenPath 从 listen 地址提取 ":port" 形式，用于启动日志拼面板 URL
-// （":7863" 或 "0.0.0.0:7863" → ":7863"；异常输入原样返回）。
+// （":3012" 或 "0.0.0.0:3012" → ":3012"；异常输入原样返回）。
 func panelListenPath(listen string) string {
 	for i := len(listen) - 1; i >= 0; i-- {
 		if listen[i] == ':' {
