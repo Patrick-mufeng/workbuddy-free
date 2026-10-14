@@ -1,10 +1,13 @@
 # Android 构建产物与本地配置（不进版本库）
 .gradle/
-build/
-local.properties
-*.apk
+/app/build/
+/local.properties
 *.aab
 .cxx/
+
+# APK：只有 dist/ 下的发行包入库（用户下载即装），其余构建产物一律忽略
+*.apk
+!/dist/*.apk
 
 # Go 交叉编译产物：由 build.sh 从 cmd/server 生成，不入库
 app/src/main/jniLibs/**/*.so

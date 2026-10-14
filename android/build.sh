@@ -171,6 +171,21 @@ echo
 echo "✓ 构建完成：$APK"
 ls -lh "$APK" | awk '{print "  大小: "$5}'
 
+# ── release 产物归档到 dist/（该目录入库，供直接下载安装）─────────────
+# 只归档 release：debug 包带调试信息且体积大一倍，没有分发价值。
+if [ "$BUILD_TYPE" = "release" ]; then
+  VERSION="$(grep -m1 'versionName' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')"
+  DIST="$SCRIPT_DIR/dist"
+  mkdir -p "$DIST"
+  TARGET="$DIST/workbuddy-gateway-${VERSION}-arm64.apk"
+  cp "$APK" "$TARGET"
+  # 校验文件与仓库 Release 的 SHA256SUMS.txt 约定一致，方便用户验证完整性。
+  (cd "$DIST" && sha256sum "$(basename "$TARGET")" > SHA256SUMS.txt)
+  echo
+  echo "✓ 已归档到 dist/：$(basename "$TARGET")"
+  cat "$DIST/SHA256SUMS.txt" | sed 's/^/  /'
+fi
+
 # ── 可选：安装到设备 ───────────────────────────────────────────────────
 if [ "$DO_INSTALL" = "1" ]; then
   echo

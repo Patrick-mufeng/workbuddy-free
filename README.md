@@ -117,6 +117,15 @@
 
 配套的安卓 App（[`android/`](android/README.md)）把网关直接跑在手机上：内置前台服务常驻、开机自启、WebView 承载面板，**手机本体即服务器**，局域网内其它设备打开 `http://<手机IP>:3012` 即可操作同一套面板。
 
+**直接下载安装**：[`android/dist/workbuddy-gateway-1.0.0-arm64.apk`](android/dist/)（约 8 MB，arm64-v8a）
+
+```bash
+adb install -r android/dist/workbuddy-gateway-1.0.0-arm64.apk
+# 或把 APK 传到手机点击安装（需允许「安装未知来源应用」）
+```
+
+从源码构建见 [`android/README.md`](android/README.md)。
+
 ## 从其它设备访问
 
 网关默认监听 `0.0.0.0`，局域网内其它设备可直接接入：
@@ -134,7 +143,7 @@
 - **单文件二进制**（推荐）：Windows / macOS / Linux 直接下载运行，**无需 Docker、无需 Go**
 - **Docker + Docker Compose**（服务端部署，镜像内已含低权限用户与全部工具脚本），**或**
 - 从源码构建：宿主机 Go ≥ 1.22
-- **安卓 App**（可选）：把网关跑在手机上，见 [`android/`](android/README.md)——需 Go + Android NDK r28+ + JDK 17
+- **安卓 App**（可选）：把网关跑在手机上，[**下载 APK**](android/dist/) 或见 [`android/README.md`](android/README.md)（自行构建需 Go + Android NDK r28+ + JDK 17）
 - 一个或多个已注册的 WorkBuddy 账号
 
 ### 方式一：下载预编译二进制（最省事）

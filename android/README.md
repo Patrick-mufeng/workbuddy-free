@@ -88,20 +88,54 @@ Go 标准库在 Android 上把 `time.Local` **硬编码为 UTC**——`time/zone
 > **不是所有设备都能连上**：确认手机与对方在同一 Wi-Fi，且手机没有开「AP 隔离」的热点模式。
 > 反过来，**手机接公共 Wi-Fi 时 3012 端口对同网段完全开放**——请确保 `api_key` 非空。
 
+## 直接安装（无需构建）
+
+仓库内已附预编译发行包：
+
+| 文件 | 说明 |
+|---|---|
+| [`dist/workbuddy-gateway-1.0.0-arm64.apk`](dist/) | release 版，约 8 MB，**arm64-v8a**（覆盖绝大多数现代安卓手机） |
+| [`dist/SHA256SUMS.txt`](dist/SHA256SUMS.txt) | 完整性校验 |
+
+安装方式（任选）：
+
+```bash
+# ① adb（推荐，手机开 USB 调试）
+adb install -r android/dist/workbuddy-gateway-1.0.0-arm64.apk
+
+# ② 直接把 APK 传到手机，在文件管理器里点击安装
+#    需在系统设置里允许「安装未知来源应用」
+```
+
+校验完整性（可选）：
+
+```bash
+cd android/dist && sha256sum -c SHA256SUMS.txt
+```
+
+> **签名说明**：APK 用 Android 标准 debug 证书签名，适用于自用 / 内部分发。
+> 受限于此，**升级安装时会要求先卸载旧版**（签名一致则不会）。
+> 若要商店分发或需要更严格的签名管理，请自行生成 keystore 并在
+> `app/build.gradle.kts` 的 `signingConfigs` 里替换。
+>
+> **首次启动**：应用会引导关闭电池优化（Doze 会挂起网关网络访问），并申请通知权限
+> （Android 13+，用于显示前台服务状态）。MIUI 等 ROM 还需手动开启「自启动」，见下方已知限制。
+
 ## 构建
 
 需要：**Go ≥ 1.22**、**Android NDK r28+**（r28 起默认满足 16KB 页对齐）、**JDK 17**、**Android SDK**。
 
 ```bash
 cd android
-./build.sh              # 构建 debug APK
-./build.sh release      # 构建 release APK
-./build.sh --install    # 构建并 adb 安装到已连接设备
+./build.sh              # 构建 debug APK（约 14 MB，含调试信息）
+./build.sh release      # 构建 release APK，并自动归档到 dist/（约 8 MB）
+./build.sh --install    # 构建 debug 并 adb 安装到已连接设备
 ```
 
 脚本会自动探测工具链位置，可用 `ANDROID_NDK_HOME` / `ANDROID_HOME` / `JAVA_HOME` 覆盖。
 
-产物：`android/app/build/outputs/apk/debug/app-debug.apk`（约 14 MB）。
+产物：`android/app/build/outputs/apk/<类型>/`；release 另会复制一份到 `android/dist/`
+并生成 `SHA256SUMS.txt`（该目录入库，供直接下载）。
 
 ## 使用
 
