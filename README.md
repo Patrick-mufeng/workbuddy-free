@@ -105,6 +105,28 @@
 
 <img src="assets/screenshots/06-logs-dark.png" alt="运行日志" width="900">
 
+### 手机端
+
+面板是**手机优先的响应式前端**，同一套 HTML 在两种形态间自适应：
+
+| 视口 | 布局 |
+|---|---|
+| 手机（< 620px） | 顶部状态条 + **底部标签栏**（拇指可达），账号用**卡片**（一屏读完一个账号，无需横向滚动），观测条 2 列 |
+| 平板（620–980px） | 卡片双列，观测条 3 列 |
+| 桌面（≥ 980px） | **左侧栏**导航，卡片 2–3 列自适应网格，观测条一行 6 格 |
+
+配套的安卓 App（[`android/`](android/README.md)）把网关直接跑在手机上：内置前台服务常驻、开机自启、WebView 承载面板，**手机本体即服务器**，局域网内其它设备打开 `http://<手机IP>:3012` 即可操作同一套面板。
+
+## 从其它设备访问
+
+网关默认监听 `0.0.0.0`，局域网内其它设备可直接接入：
+
+- **管理面板**：浏览器打开 `http://<网关IP>:3012` —— 根路径会**自动跳转**到 `/panel/`，不用记后缀；输入 `api_key` 进入，功能与在网关机器上操作完全一致（查看账号、签到、添加账号、看统计、改配置）。
+- **OpenAI 接口**：Base URL 填 `http://<网关IP>:3012/v1`。
+- 面板左上角有「**复制访问地址**」按钮，一键拿到当前地址；`GET /panel/api/overview` 的 `panel_url` 字段也返回它（按请求视角推导：本机访问给 `127.0.0.1`，其它设备访问给局域网 IP）。
+
+> ⚠️ **安全**：网关是明文 HTTP，端口对同网段完全开放。**务必设置 `api_key`**（首次启动已随机生成）；接入公共 Wi-Fi 时尤其注意。
+
 ## 快速开始
 
 ### 环境要求
@@ -112,6 +134,7 @@
 - **单文件二进制**（推荐）：Windows / macOS / Linux 直接下载运行，**无需 Docker、无需 Go**
 - **Docker + Docker Compose**（服务端部署，镜像内已含低权限用户与全部工具脚本），**或**
 - 从源码构建：宿主机 Go ≥ 1.22
+- **安卓 App**（可选）：把网关跑在手机上，见 [`android/`](android/README.md)——需 Go + Android NDK r28+ + JDK 17
 - 一个或多个已注册的 WorkBuddy 账号
 
 ### 方式一：下载预编译二进制（最省事）
@@ -136,7 +159,7 @@
 ./wb2api -config config.json
 ```
 
-首次启动会在当前目录**自动生成 `config.json`**（含随机 `api_key`，日志打印一次），随后浏览器打开 <http://127.0.0.1:7863/panel/> 添加账号。
+首次启动会在当前目录**自动生成 `config.json`**（含随机 `api_key`，日志打印一次），随后浏览器打开 <http://127.0.0.1:3012/panel/> 添加账号。
 
 各包内容：
 
@@ -159,11 +182,11 @@ cp config.example.json config.json
 docker compose up -d --build
 
 # 健康检查（无可用账号时返回 503）
-curl -s http://localhost:7863/healthz
+curl -s http://localhost:3012/healthz
 # {"healthy":0,"total":0,"service":"workbuddy-free"}
 ```
 
-启动后打开 **`http://localhost:7863/panel/`**，用面板「添加账号」完成登录。
+启动后打开 **`http://localhost:3012/panel/`**，用面板「添加账号」完成登录。
 
 常用运维命令：
 
@@ -221,7 +244,7 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o wb
 
 **方式 A：Web 面板（推荐，各平台通用）**
 
-打开 `http://127.0.0.1:7863/panel/`，点右上角「**添加账号**」：面板展示授权链接 → 浏览器完成登录 → 自动检测并落盘凭证 → **热加载进池（无需重启）**，顺带完成首次签到。支持国内版（CN）与国际版（Global）两种账号。
+打开 `http://127.0.0.1:3012/panel/`，点右上角「**添加账号**」：面板展示授权链接 → 浏览器完成登录 → 自动检测并落盘凭证 → **热加载进池（无需重启）**，顺带完成首次签到。支持国内版（CN）与国际版（Global）两种账号。
 
 <img src="assets/screenshots/07-add-account-dark.png" alt="添加账号" width="820">
 
@@ -240,19 +263,19 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o wb
 
 ```bash
 # 模型列表
-curl -s http://localhost:7863/v1/models -H "Authorization: Bearer your-api-key"
+curl -s http://localhost:3012/v1/models -H "Authorization: Bearer your-api-key"
 
 # 账号状态（汇总 + 每账号详情）
-curl -s http://localhost:7863/status  -H "Authorization: Bearer your-api-key"
+curl -s http://localhost:3012/status  -H "Authorization: Bearer your-api-key"
 
 # 流式聊天
-curl -sN http://localhost:7863/v1/chat/completions \
+curl -sN http://localhost:3012/v1/chat/completions \
   -H "Authorization: Bearer your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"model":"cn:glm-5.2","messages":[{"role":"user","content":"hi"}],"stream":true}'
 
 # 非流式聊天（本地聚合）
-curl -s http://localhost:7863/v1/chat/completions \
+curl -s http://localhost:3012/v1/chat/completions \
   -H "Authorization: Bearer your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"model":"cn:glm-5.2","messages":[{"role":"user","content":"hi"}],"stream":false}'
@@ -270,7 +293,7 @@ curl -s http://localhost:7863/v1/chat/completions \
 
 | 要素 | 填什么 | 从哪拿 |
 |---|---|---|
-| **接口地址** | `http://<网关地址>:7863/v1` | 网关所在机器 IP，本机即 `127.0.0.1` |
+| **接口地址** | `http://<网关地址>:3012/v1` | 网关所在机器 IP，本机即 `127.0.0.1` |
 | **API 密钥** | `sk-...` | 面板「配置」页的 **API 密钥** 字段，或 `config.json` 的 `api_key` |
 | **模型名** | `cn:glm-5.2` 等 | 面板「模型与档位」页第一列，或 `GET /v1/models` |
 
@@ -289,7 +312,7 @@ curl -s http://localhost:7863/v1/chat/completions \
 | 字段（各家叫法略不同） | 填什么 |
 |---|---|
 | 类型 / Provider / 接口格式 | **OpenAI 兼容 / OpenAI Compatible** |
-| 接口地址 / Base URL / API 地址 | `http://<网关地址>:7863/v1` |
+| 接口地址 / Base URL / API 地址 | `http://<网关地址>:3012/v1` |
 | API Key / 密钥 | 上一步拿到的 `sk-...` |
 | 模型名 / Model | `cn:glm-5.2` 这样带前缀的名字 |
 
@@ -315,7 +338,7 @@ curl -s http://localhost:7863/v1/chat/completions \
       "kind": "openai-compatible",              // ⚠️ 必须是 openai-compatible
       "options": {
         "apiKey": "sk-你的密钥",
-        "baseURL": "http://127.0.0.1:7863/v1",  // ⚠️ 必须带 /v1
+        "baseURL": "http://127.0.0.1:3012/v1",  // ⚠️ 必须带 /v1
         "apiKeyRequired": true
       },
       "models": {
@@ -339,7 +362,7 @@ curl -s http://localhost:7863/v1/chat/completions \
 **先用 curl 打通，再配客户端**——这样能一步区分「网关问题」还是「客户端配置问题」：
 
 ```bash
-curl -s http://127.0.0.1:7863/v1/chat/completions \
+curl -s http://127.0.0.1:3012/v1/chat/completions \
   -H "Authorization: Bearer sk-你的密钥" \
   -H "Content-Type: application/json" \
   -d '{"model":"cn:glm-5.2","messages":[{"role":"user","content":"hi"}],"stream":false}'
@@ -361,7 +384,7 @@ curl -s http://127.0.0.1:7863/v1/chat/completions \
 
 | 现象 | 原因 | 解决 |
 |---|---|---|
-| `404` | Base URL 少了 `/v1`，客户端又自己补一次，变成 `/v1/v1/...` | Base URL 填 `http://<host>:7863/v1` |
+| `404` | Base URL 少了 `/v1`，客户端又自己补一次，变成 `/v1/v1/...` | Base URL 填 `http://<host>:3012/v1` |
 | `404` | 用了 Anthropic 协议（`/v1/messages`） | Claude Code 不支持直连，需 OpenAI→Anthropic 转换代理 |
 | `404` | 用了 Responses 协议（`/v1/responses`） | Codex 需把 `wire_api` 设为 `chat` |
 | `401` | API 密钥不对 | 从面板「配置」页或 `config.json` 重新复制 |
@@ -377,7 +400,7 @@ curl -s http://127.0.0.1:7863/v1/chat/completions \
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `listen` | `:7863` | HTTP 监听地址 |
+| `listen` | `:3012` | HTTP 监听地址 |
 | `api_key` | 空 | 网关鉴权密钥；**空 = 不鉴权直接放行**（公网必须设置） |
 | `auth_dir` | `./auths` | 账号凭证目录 |
 | `state_file` | `./data/state.json` | 账号池状态持久化文件 |
@@ -536,7 +559,7 @@ curl -s http://127.0.0.1:7863/v1/chat/completions \
 
 ## Web 管理面板
 
-内嵌式面板（前端 go:embed 单文件打进二进制，无外部构建依赖），服务启动后访问 `http://127.0.0.1:7863/panel/`。
+内嵌式面板（前端 go:embed 单文件打进二进制，无外部构建依赖），服务启动后访问 `http://127.0.0.1:3012/panel/`。
 
 鉴权与 API 同口径：`api_key` 非空时面板要求输入一次密钥（浏览器 localStorage 记住）。界面支持**明暗主题切换**，左侧导航分五个视图：
 
@@ -619,7 +642,7 @@ curl -s http://127.0.0.1:7863/v1/chat/completions \
 
 ### 网络暴露与日志敏感度
 
-- 默认监听 `:7863`，compose 暴露 `0.0.0.0:7863`，**无内置 TLS**
+- 默认监听 `:3012`，compose 暴露 `0.0.0.0:3012`，**无内置 TLS**
 - 公网部署**必须**设置 `api_key`，建议前置反向代理 / 限制在内网
 - 请求日志字段不含 `accessToken` / `refreshToken` / `api_key` 明文
 - 日志写 **stdout / stderr**，代码无任何落盘日志文件
@@ -646,7 +669,7 @@ curl -s http://127.0.0.1:7863/v1/chat/completions \
 
 最常见三个原因：
 
-1. **Base URL 少了 `/v1`** —— 网关的路径是 `/v1/chat/completions`，Base URL 应填 `http://<host>:7863/v1`
+1. **Base URL 少了 `/v1`** —— 网关的路径是 `/v1/chat/completions`，Base URL 应填 `http://<host>:3012/v1`
 2. **协议不匹配** —— 本网关只实现 OpenAI 的 `chat/completions`。Claude Code 的 Anthropic 协议（`/v1/messages`）与 Codex 默认的 Responses 协议（`/v1/responses`）都是 **404**；Codex 需把 provider 的 `wire_api` 设为 `chat`
 3. **模型名不属于该域** —— 见上一条
 

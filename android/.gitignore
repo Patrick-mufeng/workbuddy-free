@@ -1,0 +1,10 @@
+# Android 构建产物与本地配置（不进版本库）
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+.cxx/
+
+# Go 交叉编译产物：由 build.sh 从 cmd/server 生成，不入库
+app/src/main/jniLibs/**/*.so

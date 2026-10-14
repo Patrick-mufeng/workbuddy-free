@@ -2,8 +2,12 @@
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- workbuddy-free · 控制面板
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- workbuddy-free · 控制面板（手机优先 / 响应式）
      本文件为 go:embed 进二进制的单文件前端（无外部构建步骤）。
      约束：页面不得出现内联脚本标签（CSP script-src 'self' 会拦），脚本体必须留在 app.js。
      注记：此处刻意不写出那个标签的字面量——frontend_test.go 对全文件做子串扫描，
@@ -17,34 +21,38 @@
    模糊）、2px 描边、网格底纹与 CRT 扫描线。等宽字体贯穿全站（像素终端的核心
    信号），tabular-nums 对齐所有观测值。
    注意：CSP 的 default-src 'none' 使 font-src 也为 none——不得引入任何外部或
-   内嵌字体，像素感全部由系统等宽字体 + CSS 绘制（直角/硬投影/dither）达成。 */
+   内嵌字体，像素感全部由系统等宽字体 + CSS 绘制（直角/硬投影/dither）达成。
+
+   ── 手机优先（本次重写的核心）────────────────────────────────────────
+   布局基准是 360–430px 的手机竖屏，所有尺寸先按手机定，再用 min-width 媒体
+   查询逐级放大到平板 / 桌面：
+     · 导航：手机上贴底的可点区域（拇指可达），桌面变左侧栏；
+     · 数据展示：手机用卡片（一屏读完一个账号，不需要横向滚动），
+       桌面用自适应网格排成多列——同一套 DOM，不维护两份模板；
+     · 触控目标：按钮最小高度 34px（.act 40px），避免"点不中"；
+     · 安全区：底部导航让开 iOS/Android 手势条（env(safe-area-inset-bottom)）。 */
 :root {
   color-scheme: dark;
-  /* 表面分层 */
   --bg: #0b0e14; --surface: #11161f; --surface-2: #171d28; --raise: #1d2533;
   --line: #2d3849; --line-soft: #212a38;
-  /* 文字三层 */
   --ink: #dce7f2; --ink-2: #94a5ba; --ink-3: #61738a;
-  /* 唯一装饰强调色 + 语义色（语义只给状态） */
   --accent: #2ad4e8; --accent-ink: #04161a; --accent-soft: rgba(42,212,232,.12);
   --ok: #46d67f; --ok-soft: rgba(70,214,127,.12);
   --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
   --bad: #ff5d6c; --bad-soft: rgba(255,93,108,.12);
   --inset: rgba(0,0,0,.28);
-  /* 硬投影：无模糊的位移块，像素风的骨架 */
   --shadow: 4px 4px 0 0 rgba(0,0,0,.5);
   --shadow-sm: 3px 3px 0 0 rgba(0,0,0,.45);
   --shadow-lg: 8px 8px 0 0 rgba(0,0,0,.6);
-  /* 底纹与扫描线 */
   --grid: rgba(42,212,232,.045);
   --grid-step: 34px;
   --scan: rgba(0,0,0,.24);
   --scan-opacity: .5;
-  /* 字体：全等宽（无外部字体可用，见上方 CSP 注记） */
   --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", "SF Mono", Consolas, "Courier New", monospace;
   --sans: var(--mono);
-  /* z 轴刻度：集中声明，避免散落的魔法数字 */
-  --z-sticky: 20; --z-veil: 60; --z-toast: 90; --z-fx: 200;
+  --z-sticky: 20; --z-tabs: 40; --z-veil: 60; --z-toast: 90; --z-fx: 200;
+  /* 手机端底部导航高度（含安全区），内容区据此留白 */
+  --tabs-h: calc(58px + env(safe-area-inset-bottom, 0px));
 }
 [data-theme="light"] {
   color-scheme: light;
@@ -60,16 +68,19 @@
   --shadow-sm: 3px 3px 0 0 rgba(12,17,25,.14);
   --shadow-lg: 8px 8px 0 0 rgba(12,17,25,.2);
   --grid: rgba(11,127,150,.06);
-  --scan-opacity: 0; /* 浅色下关掉扫描线：白底叠加暗线会脏 */
+  --scan-opacity: 0;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
-html, body { height: 100%; }
+html { height: 100%; }
 body {
-  background: var(--bg); color: var(--ink); font: 13px/1.6 var(--mono);
+  height: 100%; background: var(--bg); color: var(--ink);
+  font: 13.5px/1.6 var(--mono);
   -webkit-font-smoothing: antialiased;
+  /* 手机上禁掉双击缩放与横向橡皮筋：面板是应用不是文档 */
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: none;
 }
-/* 全屏纹理层：网格 + 扫描线，永远置顶且不拦截事件（z 用刻度令牌）。 */
 body::before {
   content: ""; position: fixed; inset: 0; z-index: var(--z-fx); pointer-events: none;
   background-image:
@@ -84,303 +95,225 @@ body::after {
 }
 ::selection { background: var(--accent); color: var(--accent-ink); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* 滚动条也做成方块：像素风不接受圆角滑块 */
 * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--surface-2); }
 ::-webkit-scrollbar-thumb { background: var(--line); border: 2px solid var(--surface-2); }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
-/* ── 壳层：左侧导航 + 主区 ─────────────────────────────────────────── */
-.shell { display: grid; grid-template-columns: 216px 1fr; min-height: 100vh; position: relative; z-index: 1; }
-.nav {
-  background: var(--surface); border-right: 2px solid var(--line);
-  display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+/* ── 壳层 ─────────────────────────────────────────────────────────────
+   手机：单列，顶部固定头条 + 底部固定标签栏，中间是唯一的滚动容器。
+   桌面：左侧栏 + 右侧内容，滚动交给内容区。 */
+.app {
+  display: flex; flex-direction: column;
+  min-height: 100%; height: 100%;
 }
-.brand { padding: 17px 15px 14px; border-bottom: 2px solid var(--line); }
-/* 品牌标记：像素 Buddy 猫头（内联 SVG，fill 继承强调色）。
-   取代此前的 CSS 缺角方块——9px 下像素方块读不出形状，猫头需要 18px 才成型。 */
-.brand .name {
-  font-weight: 700; letter-spacing: .1em; font-size: 12.5px; text-transform: uppercase;
-  display: flex; align-items: center; gap: 8px;
-}
-.brand .logo { width: 18px; height: 18px; flex: none; fill: var(--accent); }
-.brand .sub { color: var(--ink-3); font-size: 10.5px; font-family: var(--mono); margin-top: 4px; letter-spacing: .14em; }
-.nav ul { list-style: none; padding: 9px 9px; flex: 1; }
-.nav a {
-  display: flex; align-items: center; gap: 9px; padding: 7px 10px; margin-bottom: 3px;
-  color: var(--ink-2); text-decoration: none; font-size: 12.5px;
-  border: 2px solid transparent; letter-spacing: .02em;
-}
-.nav a:hover { background: var(--surface-2); color: var(--ink); border-color: var(--line-soft); }
-.nav a.on {
-  background: var(--accent-soft); color: var(--accent); font-weight: 700;
-  border-color: var(--accent); box-shadow: inset 4px 0 0 0 var(--accent);
-}
-.nav a svg { width: 15px; height: 15px; flex: none; opacity: .9; }
-.nav .sig { padding: 11px 15px; border-top: 2px solid var(--line); font-size: 11px; color: var(--ink-3); }
-.nav .sig .row { display: flex; align-items: center; gap: 7px; }
-.nav .sig .credit { margin-top: 7px; letter-spacing: .08em; opacity: .8; }
-/* 日志频道筛选 chips */
-.chips { display: inline-flex; gap: 5px; align-items: center; }
-.chips .chip { padding: 2px 9px; }
-.chips .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
-.ln .lch { font-style: normal; display: inline-block; font-size: 10px; line-height: 1; padding: 2px 5px; margin-right: 8px; vertical-align: 1px; font-weight: 700; }
-.ln .lch.c-task { background: var(--accent-soft); color: var(--accent); }
-.ln .lch.c-chat { background: var(--ok-soft); color: var(--ok); }
-.ln .lch.c-sys { background: var(--surface-2); color: var(--ink-3); }
-
-/* 任务中心 */
-.tc-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 42px 16px; color: var(--ink-3); }
-.tc-empty svg { width: 42px; height: 42px; opacity: .5; margin-bottom: 6px; }
-.tc-empty .t { font-weight: 700; color: var(--ink-2); letter-spacing: .04em; }
-.tc-empty .d { font-size: 12px; max-width: 34em; text-align: center; }
-.sel-note { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-3); white-space: nowrap; flex: none; }
-.sel-note select {
-  appearance: none; -webkit-appearance: none;
-  background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 8px center;
-  border: 2px solid var(--line); color: var(--ink);
-  font: 700 11.5px var(--mono); padding: 3px 22px 3px 8px; cursor: pointer;
-}
-.qprog { display: flex; align-items: center; gap: 12px; padding: 12px 15px 0; }
-.qprog .qbar { flex: 1; height: 8px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
-.qprog .qbar i {
-  display: block; height: 100%; width: 0; transition: width .5s steps(12);
-  background-image: repeating-linear-gradient(90deg, var(--accent) 0 3px, transparent 3px 5px);
-}
-.qprog .note { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.qgroup { padding: 4px 0 10px; }
-.qgroup + .qgroup { border-top: 1px solid var(--line-soft); }
-.qgroup header {
-  display: flex; align-items: baseline; gap: 9px; padding: 10px 15px 6px;
-  background: none; border: none; box-shadow: none;
-}
-.qgroup header .nm { font-weight: 700; font-size: 12.5px; letter-spacing: .04em; }
-.qgroup header .cnt { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.qrow {
-  display: grid; grid-template-columns: 118px 1fr 52px 84px minmax(120px, 240px);
-  gap: 10px; align-items: center; padding: 7px 15px; font-size: 12.5px;
-}
-.qrow:hover { background: var(--surface-2); }
-.qrow .code { font: 11px/1.35 var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qrow .name { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.qrow .name .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qrow .prog { font-variant-numeric: tabular-nums; color: var(--ink-2); text-align: right; }
-.qrow .st { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.qrow .msg { font-size: 11.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 状态方块（非圆点）：像素语言里状态即像素 */
-.qdot { width: 8px; height: 8px; flex: none; }
-.qdot.done { background: var(--ok); }
-.qdot.run { background: var(--accent); animation: qpulse 1.1s steps(2) infinite; }
-.qdot.wait { background: none; border: 2px solid var(--ink-3); }
-.qdot.err { background: var(--bad); }
-.qdot.skip { background: var(--ink-3); }
-@keyframes qpulse { 50% { opacity: .3; } }
-@media (prefers-reduced-motion: reduce) { .qdot.run { animation: none; } }
-.srow { display: grid; grid-template-columns: minmax(150px, 210px) 1fr auto; gap: 14px; align-items: center; padding: 12px 15px; }
-.srow + .srow { border-top: 1px solid var(--line-soft); }
-.srow .who .nm { font-weight: 700; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.srow .who .id { font: 10px var(--mono); color: var(--ink-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.shead {
-  display: grid; grid-template-columns: minmax(150px, 210px) 1fr auto;
-  gap: 14px; align-items: center; padding: 9px 15px 7px;
-  font-size: 10.5px; color: var(--ink-3); border-bottom: 1px solid var(--line-soft);
-  letter-spacing: .08em; text-transform: uppercase;
-}
-.shead .stasks span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stasks { display: grid; grid-template-columns: repeat(5, minmax(64px, 1fr)); gap: 6px 10px; }
-.stask { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
-.stask .mark { font-size: 13px; line-height: 1; width: 14px; text-align: center; flex: none; }
-.stask.ok .mark { color: var(--ok); }
-.stask.warn .mark { color: var(--warn); } .stask.warn .fr { color: var(--warn); font-variant-numeric: tabular-nums; }
-.stask.todo { color: var(--ink-3); }
-.srow .luck { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.srow .luck svg { width: 14px; height: 14px; opacity: .7; }
-.srow .err { grid-column: 1 / -1; font-size: 11.5px; color: var(--bad); margin-top: -4px; }
-.pulse { width: 8px; height: 8px; background: var(--ok); flex: none; box-shadow: 0 0 0 2px var(--ok-soft); }
-.pulse.bad { background: var(--bad); box-shadow: 0 0 0 2px var(--bad-soft); }
-.pulse.warn { background: var(--warn); box-shadow: 0 0 0 2px var(--warn-soft); }
-
-.main { min-width: 0; display: flex; flex-direction: column; }
 .topbar {
-  display: flex; align-items: center; gap: 12px; padding: 13px 22px;
-  border-bottom: 2px solid var(--line); background: var(--surface);
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; padding-top: calc(9px + env(safe-area-inset-top, 0px));
+  background: var(--surface); border-bottom: 2px solid var(--line);
   position: sticky; top: 0; z-index: var(--z-sticky);
 }
-.topbar h2 { font-size: 13px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-.topbar .sep { color: var(--accent); font-weight: 700; }
-.topbar .meta { color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); }
+.topbar .brand { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.topbar .brand .logo { width: 17px; height: 17px; flex: none; fill: var(--accent); }
+/* 手机顶栏容不下「品牌名 + 三个动作按钮」：隐藏文字品牌（图标仍在），
+   让「添加账号」这个主操作完整可见。桌面（≥980px）恢复文字。 */
+.topbar .brand b {
+  display: none;
+  font-weight: 700; letter-spacing: .08em; font-size: 12.5px; text-transform: uppercase;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
 .topbar .grow { flex: 1; }
-.view { padding: 20px 22px 60px; max-width: 1240px; width: 100%; }
+/* 手机端头条只留品牌与图标动作：路径文字放不下，状态移到账号页顶部。 */
+.topbar .path { display: none; color: var(--ink-3); font-size: 11.5px; white-space: nowrap; }
+
+.views { flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; }
+.view { padding: 14px 12px calc(18px + var(--tabs-h)); }
 .view[hidden] { display: none; }
 
+/* ── 底部标签栏（手机）／左侧栏（桌面）────────────────────────────── */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-tabs);
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  background: var(--surface); border-top: 2px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.tabbar a {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 9px 2px 8px; min-height: 54px;
+  color: var(--ink-3); text-decoration: none; font-size: 9.5px; letter-spacing: .02em;
+  border-top: 3px solid transparent; transition: color .12s, background .12s;
+}
+.tabbar a svg { width: 19px; height: 19px; flex: none; }
+.tabbar a.on { color: var(--accent); border-top-color: var(--accent); background: var(--accent-soft); font-weight: 700; }
+.tabbar a:active { background: var(--surface-2); }
+.tabbar .navsig { display: none; }
+
 /* ── 控件 ─────────────────────────────────────────────────────────── */
-/* 像素按钮：硬投影 + 按下位移，过渡用 steps() 制造跳变而非平滑缓动 */
 button {
-  font: inherit; font-size: 12.5px; letter-spacing: .02em;
+  font: inherit; font-size: 13px; letter-spacing: .02em;
   color: var(--ink); background: var(--surface-2);
-  border: 2px solid var(--line); padding: 6px 12px; cursor: pointer;
-  box-shadow: var(--shadow-sm);
+  border: 2px solid var(--line); padding: 7px 12px; cursor: pointer;
+  box-shadow: var(--shadow-sm); min-height: 36px;
   transition: transform .07s steps(2), box-shadow .07s steps(2),
               background .12s, border-color .12s, color .12s;
+  /* 触屏上禁用长按选中与点击高亮，手感更接近原生 */
+  -webkit-tap-highlight-color: transparent; user-select: none;
 }
 button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-button:active:not(:disabled) { transform: translate(3px, 3px); box-shadow: 0 0 0 0 transparent; }
+button:active:not(:disabled) { transform: translate(2px, 2px); box-shadow: 0 0 0 0 transparent; }
 button:disabled { opacity: .45; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
 button.primary:hover:not(:disabled) { filter: brightness(1.12); color: var(--accent-ink); }
 button.ghost { background: transparent; }
 button.danger { color: var(--bad); }
 button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
-button.xs { padding: 3px 8px; font-size: 11.5px; box-shadow: 2px 2px 0 0 rgba(0,0,0,.4); }
-button.xs:active:not(:disabled) { transform: translate(2px, 2px); }
-button.icon { padding: 6px 8px; }
+button.xs { padding: 5px 9px; font-size: 12px; min-height: 30px; box-shadow: 2px 2px 0 0 rgba(0,0,0,.4); }
+button.icon { padding: 6px; min-width: 36px; }
+button.icon svg { display: block; width: 17px; height: 17px; margin: 0 auto; }
 input, select {
-  font: inherit; font-size: 12.5px; color: var(--ink); background: var(--bg);
-  border: 2px solid var(--line); padding: 6px 10px; width: 100%;
+  font: inherit; font-size: 13.5px; color: var(--ink); background: var(--bg);
+  border: 2px solid var(--line); padding: 9px 11px; width: 100%;
   box-shadow: inset 2px 2px 0 0 var(--inset);
   transition: border-color .12s, box-shadow .12s;
 }
 input:focus, select:focus { outline: none; border-color: var(--accent); }
-/* checkbox / radio 必须显式重置宽度与内边距：通用规则 input{width:100%;padding:6px 10px}
-   会把它们撑开（border-box 下 padding 不可压缩，radio 实测被撑成 24×16 的矩形，
-   并把同行文字挤到折行）。 */
 input[type=checkbox], input[type=radio] { width: auto; padding: 0; accent-color: var(--accent); box-shadow: none; flex: none; }
-input[type=checkbox] { width: 16px; height: 16px; }
+input[type=checkbox] { width: 20px; height: 20px; }
 /* 单选改方形：原生圆形与像素语言冲突，appearance:none 后自绘方块 + 内嵌孔 */
-input[type=radio] { appearance: none; -webkit-appearance: none; width: 15px; height: 15px; border: 2px solid var(--line); background: var(--bg); cursor: pointer; transition: border-color .12s, background .12s; }
+input[type=radio] { appearance: none; -webkit-appearance: none; width: 19px; height: 19px; border: 2px solid var(--line); background: var(--bg); cursor: pointer; transition: border-color .12s, background .12s; }
 input[type=radio]:checked { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2px var(--bg); }
 label.fld { display: block; margin-bottom: 14px; }
-label.fld > .lb { display: block; font-size: 11.5px; color: var(--ink-2); margin-bottom: 5px; letter-spacing: .04em; }
-label.fld > .hint { display: block; font-size: 11px; color: var(--ink-3); margin-top: 4px; }
-.inline { display: flex; align-items: center; gap: 9px; }
-/* flex 容器里的按钮必须禁收缩：input 的 width:100% 会把它压到最小内容宽，
-   中文按钮随即逐字断行（「显示」会被拆成竖排两行）。 */
+label.fld > .lb { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; letter-spacing: .04em; }
+label.fld > .hint { display: block; font-size: 11px; color: var(--ink-3); margin-top: 5px; }
+.inline { display: flex; align-items: center; gap: 8px; }
 .inline > input { min-width: 0; }
 .inline > button { flex: none; }
+.hint { color: var(--ink-3); font-size: 11.5px; }
 
-/* ── 统计条（观测区）──────────────────────────────────────────────── */
-.stats {
-  display: grid; grid-template-columns: repeat(6, 1fr);
-  border: 2px solid var(--line); background: var(--surface);
-  overflow: hidden; margin-bottom: 18px; box-shadow: var(--shadow);
-}
-@media (max-width: 980px) { .stats { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 560px) { .stats { grid-template-columns: repeat(2, 1fr); } }
-.stat { padding: 13px 15px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
-.stat .v { font: 700 24px/1.15 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.01em; white-space: nowrap; }
-.stat .k { color: var(--ink-3); font-size: 10.5px; margin-top: 5px; letter-spacing: .1em; }
+/* ── 观测条 ─────────────────────────────────────────────────────────
+   手机上 2 列（数字够大、一眼看清），平板 3 列，桌面 6 列一行。 */
+.stats { display: grid; grid-template-columns: 1fr 1fr; border: 2px solid var(--line); background: var(--surface); box-shadow: var(--shadow); margin-bottom: 14px; }
+.stat { padding: 12px 13px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); min-width: 0; }
+.stat .v { font: 700 21px/1.15 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 「积分剩余 / 总额」是唯一装两个数的格子（如 17,829/25,817），
+   与其他单值格同字号时在窄列里会被截断——单独降一档字号给它腾出宽度。 */
+.stat.credits .v { font-size: 17px; }
+.stat .k { color: var(--ink-3); font-size: 11px; margin-top: 4px; letter-spacing: .06em; }
 .stat.good .v { color: var(--ok); } .stat.warn .v { color: var(--warn); } .stat.bad .v { color: var(--bad); }
 
 /* ── 面板块 ───────────────────────────────────────────────────────── */
-.box {
-  background: var(--surface); border: 2px solid var(--line);
-  box-shadow: var(--shadow); margin-bottom: 18px; overflow: hidden;
-}
+.box { background: var(--surface); border: 2px solid var(--line); box-shadow: var(--shadow); margin-bottom: 14px; overflow: hidden; }
 .box > header {
-  display: flex; align-items: center; gap: 11px; padding: 10px 15px;
-  border-bottom: 2px solid var(--line); background: var(--surface-2);
+  display: flex; align-items: center; gap: 9px; padding: 11px 13px;
+  border-bottom: 2px solid var(--line); background: var(--surface-2); flex-wrap: wrap;
 }
-/* 面板标题前的缺角方块标记（与品牌标记同族） */
-.box > header h3 { font-size: 12px; font-weight: 700; letter-spacing: .06em; display: flex; align-items: center; gap: 8px; }
+.box > header h3 { font-size: 12.5px; font-weight: 700; letter-spacing: .06em; display: flex; align-items: center; gap: 8px; }
 .box > header h3::before {
   content: ""; width: 8px; height: 8px; flex: none; background: var(--accent);
   clip-path: polygon(0 0, 100% 0, 100% 55%, 55% 55%, 55% 100%, 0 100%);
 }
 .box > header .grow { flex: 1; }
 .box > header .note { color: var(--ink-3); font-size: 11.5px; }
-.box .pad { padding: 16px; }
+.box .pad { padding: 14px 13px; }
+/* 批量动作行：允许换行而不是横向滚动——滚动条在手机上是隐藏的，
+   越界的按钮会"看不见也想不到"，换行则一眼看全（320px 极窄屏下会排两行）。 */
+.actions { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 13px; border-bottom: 1px solid var(--line-soft); min-width: 0; }
+.actions button { flex: none; }
 
-/* ── 账号表（签名元素：健康色条 + 积分量条）───────────────────────── */
-.tbl-wrap { overflow-x: auto; }
-.acc { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 640px; }
-.acc th {
-  text-align: left; font-weight: 700; font-size: 10.5px; color: var(--ink-3);
-  padding: 8px 10px; border-bottom: 2px solid var(--line); white-space: nowrap;
-  letter-spacing: .08em; text-transform: uppercase; background: var(--surface-2);
+/* ── 账号卡片 ───────────────────────────────────────────────────────
+   手机上不再用 9 列表格（必须横向滚动、读一行要来回扫）。一张卡片 = 一个账号：
+   左侧色条表状态，第一行是身份与状态标签，第三行是积分量条，第四行是四个关键
+   指标，最后一行是全部操作——从上到下正好是运维的判断顺序。
+   桌面用 auto-fill 网格铺成多列，同一套 DOM。 */
+.cards { display: grid; grid-template-columns: 1fr; gap: 0; }
+.card {
+  position: relative; padding: 12px 13px 11px 15px;
+  border-bottom: 1px solid var(--line-soft); min-width: 0;
 }
-.acc td { padding: 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
-.acc tr:last-child td { border-bottom: none; }
-.acc tbody tr:hover { background: var(--surface-2); }
-/* 健康色条用真实单元格（td.mark）实现，而不是 tr::before 伪元素：
-   伪元素在表格行内会被浏览器当作匿名单元格插入行首，整行内容右移一列、
-   与表头错位——窗口越宽列越宽越明显。 */
-.acc .mark { width: 4px; min-width: 4px; padding: 0; }
-.acc .mark i { display: block; width: 4px; height: 100%; min-height: 38px; background: var(--ok); }
-.acc tbody tr.cool .mark i { background: var(--warn); }
-.acc tbody tr.off .mark i { background: var(--bad); }
-/* 模型表无色条（健康指示只属于账号表）。 */
-.acc.md .mark { display: none; }
-/* 操作列用 width:1px + nowrap 的经典技巧：列宽恰为内容宽，其余列按内容自适应 */
-.acc .c-acts { width: 1px; white-space: nowrap; }
-/* 档位标签列：允许换行在标签之间（不拆字），并给足最小宽度 */
-.acc .efs { min-width: 150px; }
-.acc .efs .tag { margin: 1px 0; }
-/* 模型表：紧凑一些，7 列在常见窗口下尽量免横向滚动 */
-.acc.md { min-width: 700px; }
-.acc.md th, .acc.md td { padding: 9px 8px; }
-.who { min-width: 118px; max-width: 200px; }
-#taskTable .who { max-width: 360px; }
-#taskTable .who .nm, #taskTable .who .id { white-space: normal; word-break: break-all; }
-.who .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.who .id { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.realm-tag {
-  display: inline-block; margin-left: 6px; padding: 1px 5px; font: 700 9.5px/1.5 var(--mono);
-  color: var(--accent); background: var(--accent-soft);
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  vertical-align: 1px; letter-spacing: .06em; text-transform: uppercase;
+.card:last-child { border-bottom: none; }
+.card::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--ok);
 }
-.realm-row { display: flex; align-items: center; gap: 14px; padding: 4px 0 10px; }
-.realm-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
-.realm-opt input { accent-color: var(--accent); margin: 0; box-shadow: none; }
-.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.usage-cell { min-width: 268px; }
-.usage-line {
-  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
-  font: 700 11px/1.3 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap;
-}
-.usage-item {
-  display: inline-flex; align-items: baseline; padding: 3px 6px; border: 1px solid transparent;
-  background: var(--surface-2);
-}
-.usage-item b { font-weight: 700; }
-.usage-item em { margin-left: 2px; font: 500 10px/1 var(--mono); font-style: normal; }
-.usage-count { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
-.usage-total {
-  color: var(--accent); background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
-  box-shadow: inset 2px 0 0 0 var(--accent);
-}
-.usage-total b { font-size: 11.5px; letter-spacing: -.01em; }
-.usage-total em { color: var(--ink-2); }
-.usage-latency { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
-.usage-rate { color: var(--ok); background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
-.cred { min-width: 84px; }
-.cred .n { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; }
-.cred .n .of { color: var(--ink-3); font-size: 11px; }
-/* 量条走 dither：实心块之间留缝，读出像素颗粒感 */
-.bar { height: 8px; background: var(--bg); border: 1px solid var(--line); margin-top: 6px; overflow: hidden; max-width: 92px; }
-/* transform-origin 左端：量条的生长动效走 scaleX（合成层动画，不触发重排）。 */
+.card.cool::before { background: var(--warn); }
+.card.off::before { background: var(--bad); }
+.card .r1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.card .nm { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .r1 .sp { flex: 1; }
+.card .r2 { display: flex; align-items: center; gap: 8px; margin-top: 3px; min-width: 0; }
+.card .uid { font-size: 11px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .note { color: var(--ink-3); font-size: 11.5px; margin-top: 4px; }
+.card .cred { margin-top: 9px; }
+.card .cred .top { display: flex; align-items: baseline; gap: 6px; }
+.card .cred b { font: 700 17px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.card .cred .of { color: var(--ink-3); font-size: 12px; }
+.card .cred .lb { color: var(--ink-3); font-size: 11px; letter-spacing: .06em; }
+.bar { height: 9px; background: var(--bg); border: 1px solid var(--line); margin-top: 6px; overflow: hidden; }
+/* 量条走 dither：实心块之间留缝，读出像素颗粒感；scaleX 生长不触发重排 */
 .bar i { display: block; height: 100%; transform-origin: left; background-image: repeating-linear-gradient(90deg, var(--accent) 0 3px, transparent 3px 5px); }
+/* 指标格：手机上 2×2 排（每格约 150px，容得下 "41.5tok/s" 这类长值），
+   宽屏再放到 4 列一行。用 auto-fit + minmax 让它在任何宽度下都不溢出。 */
+.card .mets { display: grid; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); gap: 9px 10px; margin-top: 10px; }
+.card .met { min-width: 0; }
+.card .met b { display: block; font: 700 14px/1.2 var(--mono); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .met span { display: block; color: var(--ink-3); font-size: 10.5px; letter-spacing: .05em; margin-top: 2px; }
+.card .met.bad b { color: var(--bad); }
+/* 操作行：允许换行，保证每个按钮完整可见可点（窄屏上会排成两行，
+   好过把「移除」这种按钮藏进看不见的横向滚动区）。 */
+.card .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; min-width: 0; }
+.card .acts button { flex: none; min-height: 34px; padding: 6px 11px; font-size: 12.5px; }
+
+/* 窄屏摘要行（模型 / 排行共用）：标题一行，指标一行，长内容换行不截断 */
+.rows { display: grid; grid-template-columns: 1fr; }
+.row { padding: 11px 13px; border-bottom: 1px solid var(--line-soft); min-width: 0; }
+.row:last-child { border-bottom: none; }
+.row .h { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.row .h .nm { font-weight: 700; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .h .sp { flex: 1; }
+.row .sub { color: var(--ink-3); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .kv { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 8px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.row .kv b { color: var(--ink); font-weight: 700; }
+.row .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+
 .tag {
-  display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
-  font-size: 10.5px; font-weight: 700; white-space: nowrap; letter-spacing: .05em;
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
+  font-size: 11px; font-weight: 700; white-space: nowrap; letter-spacing: .04em;
   border: 1px solid transparent;
 }
 .tag.ok { background: var(--ok-soft); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
 .tag.warn { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .tag.bad { background: var(--bad-soft); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
 .tag.mute { background: var(--surface-2); color: var(--ink-3); border-color: var(--line); }
-.acts { display: flex; gap: 5px; justify-content: flex-end; white-space: nowrap; }
-.acts button { padding: 3px 7px; font-size: 11.5px; white-space: nowrap; flex: none; box-shadow: 2px 2px 0 0 rgba(0,0,0,.4); }
+.realm-tag {
+  display: inline-block; padding: 1px 5px; font: 700 9.5px/1.5 var(--mono);
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  letter-spacing: .06em; text-transform: uppercase; flex: none;
+}
+.empty { padding: 34px 18px; text-align: center; color: var(--ink-3); }
+.empty .big { font-size: 14px; color: var(--ink-2); margin-bottom: 6px; font-weight: 700; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.empty { padding: 40px 20px; text-align: center; color: var(--ink-3); }
-.empty .big { font-size: 13px; color: var(--ink-2); margin-bottom: 6px; }
+/* ── 运行状态（账号页顶部的小方块）────────────────────────────────── */
+.statusbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 9px 12px; margin-bottom: 14px;
+  background: var(--surface); border: 2px solid var(--line); box-shadow: var(--shadow-sm);
+  font-size: 11.5px; color: var(--ink-2);
+}
+/* 「复制访问地址」在手机上是整行显示（flex-basis:100% 换行），否则它会被
+   状态文字挤到右边缘之外——那条状态行在 360px 下已经占满。 */
+.statusbar .copyrow { flex-basis: 100%; }
+.statusbar .copyrow button { width: 100%; min-height: 34px; }
+.pulse { width: 9px; height: 9px; background: var(--ok); flex: none; box-shadow: 0 0 0 2px var(--ok-soft); }
+.pulse.bad { background: var(--bad); box-shadow: 0 0 0 2px var(--bad-soft); }
+.pulse.warn { background: var(--warn); box-shadow: 0 0 0 2px var(--warn-soft); }
+.statusbar .sep { color: var(--line); }
 
 /* ── 日志（终端质感）────────────────────────────────────────────── */
 #logBox {
-  max-height: 440px; overflow: auto; margin: 0; padding: 14px 16px;
+  max-height: 58vh; overflow: auto; margin: 0; padding: 12px 13px;
   font: 11.5px/1.75 var(--mono); white-space: pre-wrap; word-break: break-all; color: var(--ink-2);
   background: var(--bg);
   background-image: repeating-linear-gradient(0deg, var(--grid) 0 1px, transparent 1px 4px);
@@ -388,218 +321,327 @@ label.fld > .hint { display: block; font-size: 11px; color: var(--ink-3); margin
 #logBox .ln { display: block; }
 #logBox .ln.e { color: var(--bad); }
 #logBox .ln.w { color: var(--warn); }
+.chips { display: inline-flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+.chips .chip { padding: 4px 10px; }
+.chips .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+.ln .lch { font-style: normal; display: inline-block; font-size: 10px; line-height: 1; padding: 2px 5px; margin-right: 8px; vertical-align: 1px; font-weight: 700; }
+.ln .lch.c-task { background: var(--accent-soft); color: var(--accent); }
+.ln .lch.c-chat { background: var(--ok-soft); color: var(--ok); }
+.ln .lch.c-sys { background: var(--surface-2); color: var(--ink-3); }
 
-/* ── 用量统计（消费计量）────────────────────────────────────────────
+/* ── 用量统计 ─────────────────────────────────────────────────────
    本页的签名元素是「消费节律」柱图：每根柱子由 3px/5px 的抖动块自下而上堆成
-   （与积分量条同一套纹理语言，只是把方向转成纵向），从 2px 基线往上长——读起来
-   像一台计量表，而不是圆角+渐变的通用图表。全页只有这一处用重手法，其余区块
-   沿用既有的观测条与表格语言。 */
-
-/* 累计头条：全页层级最高的一次观测。它与下方"区间"区块是两个数据源
-   （池内长期累计 vs 统计文件窗口），用 2px 线硬隔开并各自标注口径——
-   两个口径混在一处是这一页最容易误读的地方。
-   注：内层容器叫 .top 而不是 .main——.main 是壳层主区（flex-direction: column），
-   同名会让这里的横向排布被扭转成竖排且交叉轴右对齐。 */
-.hero { border: 2px solid var(--line); background: var(--surface); box-shadow: var(--shadow); margin-bottom: 18px; }
-.hero .top { display: flex; align-items: flex-end; gap: 30px; padding: 17px 19px 15px; flex-wrap: wrap; }
+   （与积分量条同一套纹理语言，只是把方向转成纵向），从 2px 基线往上长。 */
+.hero { border: 2px solid var(--line); background: var(--surface); box-shadow: var(--shadow); margin-bottom: 14px; }
+.hero .top { padding: 15px 14px 13px; }
 .hero .big { display: flex; align-items: baseline; gap: 7px; }
-.hero .big b { font: 700 40px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--accent); }
+.hero .big b { font: 700 34px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--accent); }
 .hero .big i { font: 500 12px/1 var(--mono); font-style: normal; color: var(--ink-3); letter-spacing: .12em; }
-.hero .big .lb { font-size: 10.5px; color: var(--ink-3); letter-spacing: .1em; align-self: flex-end; padding-bottom: 3px; }
-/* 支撑读数推到右端：头条读作"左侧一个大数 + 右侧一组支撑值"的双锚点表头，
-   比全部挤在左边留出半行空白更像是刻意的版式。窄屏换行后取消右推，
-   否则第二行会被整体顶到右边。 */
-.hero .side { display: flex; gap: 26px; flex-wrap: wrap; margin-left: auto; }
-@media (max-width: 900px) { .hero .side { margin-left: 0; } }
+.hero .big .lb { font-size: 11px; color: var(--ink-3); letter-spacing: .08em; align-self: flex-end; padding-bottom: 3px; }
+.hero .side { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-top: 14px; }
 .hero .side .v { font: 700 15px/1.15 var(--mono); font-variant-numeric: tabular-nums; }
-.hero .side .k { font-size: 10.5px; color: var(--ink-3); letter-spacing: .08em; margin-top: 5px; }
-.hero .foot { padding: 9px 19px; border-top: 1px solid var(--line-soft); background: var(--surface-2); font-size: 11.5px; color: var(--ink-3); }
-
-/* 口径切换行：区间口径只作用于下面的观测条与图表；累计口径在头条里，互不干扰。 */
-.rngrow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.hero .side .k { font-size: 10.5px; color: var(--ink-3); letter-spacing: .06em; margin-top: 4px; }
+.hero .foot { padding: 9px 14px; border-top: 1px solid var(--line-soft); background: var(--surface-2); font-size: 11.5px; color: var(--ink-3); }
+.rngrow { display: flex; align-items: center; gap: 10px; margin-bottom: 11px; flex-wrap: wrap; }
 .rngrow .note { color: var(--ink-3); font-size: 11.5px; }
 
-/* 图表：三行共用同一套 grid 轨道（auto-columns 1fr + 相同 gap），
-   柱、请求量细条、刻度标签因此天然对齐，无需测量像素。 */
-.chart { padding: 16px 16px 12px; }
-.plot, .strip, .scale { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; }
-/* 柱体与细条用百分比高度，故行高必须是确定值、且各自有满高的容体——
-   否则百分比高度回退成 auto，柱子会塌成 0。 */
-.plot { height: 196px; border-bottom: 2px solid var(--line); }
-.strip { height: 24px; margin-top: 3px; }
+/* 图表：三行共用同一套 grid 轨道，柱、请求量细条、刻度天然对齐。
+   手机上柱宽约 10px——够看趋势，点选靠整列的热区（.col 撑满高度）。 */
+.chart { padding: 14px 13px 12px; }
+.plot, .strip, .scale { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; }
+.plot { height: 168px; border-bottom: 2px solid var(--line); }
+.strip { height: 22px; margin-top: 3px; }
 .scale { margin-top: 6px; }
-.scale span {
-  font: 500 9.5px/1 var(--mono); color: var(--ink-3); text-align: center;
-  white-space: nowrap; overflow: hidden; letter-spacing: .04em;
-}
+.scale span { font: 500 9.5px/1 var(--mono); color: var(--ink-3); text-align: center; white-space: nowrap; overflow: hidden; letter-spacing: .03em; }
 .col, .col-r { height: 100%; display: flex; align-items: flex-end; }
-.col { cursor: crosshair; outline-offset: 2px; }
-/* 柱体用纵向抖动：实心块之间留 2px 缝，与积分量条（横向 3px/5px）同族。 */
+.col { cursor: pointer; outline-offset: 2px; }
 .col .fill {
   width: 100%; height: var(--h);
   background-image: repeating-linear-gradient(0deg, var(--accent) 0 3px, transparent 3px 5px);
-  transform-origin: bottom;
+  transform-origin: bottom; pointer-events: none;
 }
-/* 零值柱留一条地面刻线：否则空档看起来像"没数据"，而它其实是"那天真的没有"。 */
 .col.zero .fill { height: 2px; background-image: none; background: var(--line); }
-.col:hover .fill, .col.on .fill { background-color: var(--accent-soft); }
-.col.on .fill { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
-/* 峰值柱顶一道横杠：给整张图一个比例参照（无刻度柱图读不出量级）。 */
+.col.on .fill { background-color: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
 .col.peak .fill { position: relative; }
-.col.peak .fill::after {
-  content: ""; position: absolute; left: -2px; right: -2px; top: -3px; height: 2px; background: var(--accent);
-}
-/* 请求量细条：同一时间轴上的第二变量（调用了多少次），用次级色阶，
-   不与 token 柱争视觉——它回答的是"什么时候被限流过"。 */
+.col.peak .fill::after { content: ""; position: absolute; left: -2px; right: -2px; top: -3px; height: 2px; background: var(--accent); }
 .strip .r { width: 100%; height: var(--r); background: var(--ink-3); opacity: .72; min-height: 2px; }
 .strip .r.zero { background: var(--line); opacity: 1; height: 1px; }
-.chart .legend {
-  display: flex; align-items: center; gap: 16px; margin-top: 10px;
-  font-size: 10.5px; color: var(--ink-3); letter-spacing: .06em;
-}
+.chart .legend { display: flex; align-items: center; gap: 14px; margin-top: 10px; font-size: 10.5px; color: var(--ink-3); letter-spacing: .05em; flex-wrap: wrap; }
 .chart .legend i { display: inline-block; width: 10px; height: 8px; margin-right: 5px; vertical-align: -1px; }
 .chart .legend .lg-tok i { background-image: repeating-linear-gradient(0deg, var(--accent) 0 3px, transparent 3px 5px); }
 .chart .legend .lg-req i { background: var(--ink-3); opacity: .72; }
-/* 仪表读数槽：悬停/聚焦某根柱子时在这里出该点的明细，读数固定在一处刷新——
-   像仪器的一个数字窗口，而不是跟着鼠标跑的浮层（浮层要处理边缘翻转，且会挡住图）。 */
-.readout { font: 700 11.5px/1.3 var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.readout { font: 700 11.5px/1.3 var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .readout b { color: var(--accent); }
 .readout .bad { color: var(--bad); }
 
-/* 排行两表并排（窄屏堆叠）：模型与账号，同一套 .acc 表格语言 + 积分列的抖动量条。 */
-.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
-.duo > .box { margin-bottom: 0; }
-@media (max-width: 1000px) { .duo { grid-template-columns: 1fr; } }
-.duo .acc { min-width: 0; }
-.duo .acc th, .duo .acc td { padding: 8px 9px; }
-.duo .who { min-width: 0; }
-
 /* ── 配置表单 ─────────────────────────────────────────────────────── */
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
-.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 16px; }
-@media (max-width: 860px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+.grid2, .grid3 { display: grid; grid-template-columns: 1fr; gap: 0; }
 fieldset { border: none; margin-bottom: 6px; }
-legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-bottom: 10px; letter-spacing: .06em; }
-.hr { height: 2px; background: var(--line-soft); margin: 4px 0 16px; }
-.switch { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; }
-.switch .lb { font-size: 12.5px; }
+legend { font-size: 12px; color: var(--ink-3); font-weight: 700; padding-bottom: 10px; letter-spacing: .06em; }
+.hr { height: 2px; background: var(--line-soft); margin: 4px 0 14px; }
+.switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
+.switch .lb { font-size: 13px; }
 .savebar {
-  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  display: flex; align-items: center; gap: 9px; padding: 11px 13px; flex-wrap: wrap;
   border: 2px solid var(--line); background: var(--surface-2);
   position: sticky; bottom: 0; box-shadow: var(--shadow);
 }
 .savebar .grow { flex: 1; }
 .restart-note { color: var(--warn); font-size: 12px; }
 
-/* ── 弹层 ─────────────────────────────────────────────────────────── */
-/* 遮罩用点阵而非模糊：像素风里模糊是脏的，网点才是本体 */
+/* ── 弹层 ───────────────────────────────────────────────────────────
+   手机上从底部升起的抽屉式面板（拇指可达、贴近原生），桌面上居中对话框。
+   遮罩用点阵而非模糊：像素风里模糊是脏的，网点才是本体。 */
 .veil {
   position: fixed; inset: 0; display: none; z-index: var(--z-veil);
   background-color: rgba(4,7,12,.74);
   background-image: repeating-linear-gradient(45deg, rgba(0,0,0,.35) 0 2px, transparent 2px 4px);
 }
-.veil.on { display: flex; align-items: center; justify-content: center; padding: 20px; }
+.veil.on { display: flex; align-items: flex-end; justify-content: center; }
 .dlg {
   background: var(--surface); border: 2px solid var(--accent);
-  width: 560px; max-width: 100%; max-height: 86vh; display: flex; flex-direction: column;
-  box-shadow: var(--shadow-lg);
+  width: 100%; max-height: 88vh; display: flex; flex-direction: column;
+  box-shadow: var(--shadow-lg); border-bottom: none;
 }
-.dlg header { padding: 15px 18px 12px; border-bottom: 2px solid var(--line); background: var(--surface-2); }
-.dlg header h3 { font-size: 13.5px; font-weight: 700; letter-spacing: .06em; display: flex; align-items: center; gap: 8px; }
+.dlg header { padding: 14px 15px 11px; border-bottom: 2px solid var(--line); background: var(--surface-2); flex: none; }
+.dlg header h3 { font-size: 14px; font-weight: 700; letter-spacing: .06em; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dlg header h3::before {
   content: ""; width: 8px; height: 8px; flex: none; background: var(--accent);
   clip-path: polygon(0 0, 100% 0, 100% 55%, 55% 55%, 55% 100%, 0 100%);
 }
-.dlg header .hint { color: var(--ink-3); font-size: 11.5px; margin-top: 5px; }
-.dlg .body { padding: 16px 18px; overflow: auto; }
-.dlg footer { padding: 12px 18px; border-top: 2px solid var(--line); display: flex; gap: 9px; background: var(--surface-2); }
+.dlg header .hint { font-size: 11.5px; margin-top: 5px; }
+.dlg .body { padding: 15px; overflow: auto; -webkit-overflow-scrolling: touch; }
+.dlg footer { padding: 12px 15px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 2px solid var(--line); display: flex; gap: 8px; background: var(--surface-2); flex: none; flex-wrap: wrap; }
 .dlg footer .grow { flex: 1; }
+/* 页脚按钮在窄屏上均分铺满，避免"两个按钮挤左边、右边一大片空" */
+.dlg footer button { flex: 1 1 auto; }
 .url {
   background: var(--bg); border: 2px solid var(--line);
-  padding: 11px 12px; font: 11.5px var(--mono); word-break: break-all; color: var(--accent);
-  margin: 8px 0 12px; user-select: all; box-shadow: inset 2px 2px 0 0 var(--inset);
+  padding: 11px 12px; font: 12px var(--mono); word-break: break-all; color: var(--accent);
+  margin: 9px 0 12px; user-select: all; box-shadow: inset 2px 2px 0 0 var(--inset);
 }
-.state { font-size: 12.5px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
+.realm-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.realm-opt { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.state { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
 .state.ok { color: var(--ok); } .state.err { color: var(--bad); }
-/* 光标式省略号：终端里等待就是这样闪的 */
 .dots::after { content: "▊"; color: var(--accent); margin-left: 4px; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
-/* ── Toast ───────────────────────────────────────────────────────── */
-#toasts { position: fixed; right: 20px; bottom: 20px; z-index: var(--z-toast); display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+/* 任务中心的开学季矩阵：手机上每行一张卡（5 列网格在 360px 下只剩 60px/列，
+   文字必然逐字断行），桌面再回到表格状。 */
+.shead { display: none; }
+.srow { padding: 11px 13px; border-bottom: 1px solid var(--line-soft); }
+.srow:last-child { border-bottom: none; }
+.srow .who { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.srow .who .nm { font-weight: 700; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srow .who .id { font: 10.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stasks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px 10px; margin-top: 9px; }
+.stask { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); min-width: 0; }
+.stask .mark { font-size: 13px; line-height: 1; width: 14px; text-align: center; flex: none; }
+.stask.ok .mark { color: var(--ok); }
+.stask.warn .mark { color: var(--warn); } .stask.warn .fr { color: var(--warn); font-variant-numeric: tabular-nums; }
+.stask.todo { color: var(--ink-3); }
+.srow .luck { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; margin-top: 9px; }
+.srow .luck svg { width: 14px; height: 14px; opacity: .7; }
+.srow .err { font-size: 11.5px; color: var(--bad); margin-top: 6px; }
+
+/* 任务队列 */
+.tc-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 36px 16px; color: var(--ink-3); }
+.tc-empty svg { width: 40px; height: 40px; opacity: .5; margin-bottom: 6px; }
+.tc-empty .t { font-weight: 700; color: var(--ink-2); letter-spacing: .04em; }
+.tc-empty .d { font-size: 12px; max-width: 34em; text-align: center; }
+.sel-note { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.sel-note select { width: auto; padding: 5px 8px; font-size: 12px; font-weight: 700; min-height: 32px; }
+.qprog { display: flex; align-items: center; gap: 11px; padding: 11px 13px 0; }
+.qprog .qbar { flex: 1; height: 9px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+.qprog .qbar i {
+  display: block; height: 100%; width: 0; transition: width .5s steps(12);
+  background-image: repeating-linear-gradient(90deg, var(--accent) 0 3px, transparent 3px 5px);
+}
+.qprog .note { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 11.5px; }
+.qgroup { padding: 4px 0 10px; }
+.qgroup + .qgroup { border-top: 1px solid var(--line-soft); }
+.qgroup header { display: flex; align-items: baseline; gap: 9px; padding: 10px 13px 6px; background: none; border: none; box-shadow: none; }
+.qgroup header .nm { font-weight: 700; font-size: 13px; letter-spacing: .04em; }
+.qgroup header .cnt { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+/* 队列行：手机上换行排（代码/名称/状态一行，进度与消息另起），
+   桌面回到 5 列网格（见底部媒体查询）。 */
+.qrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; padding: 9px 13px; font-size: 12.5px; }
+.qrow .code { order: 1; font: 10.5px/1.35 var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+.qrow .name { order: 2; flex: 1 1 45%; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.qrow .name .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qrow .st { order: 3; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; flex: none; }
+.qrow .prog { order: 4; font-variant-numeric: tabular-nums; color: var(--ink-2); font-size: 12px; }
+.qrow .msg { order: 5; flex-basis: 100%; font-size: 11.5px; color: var(--ink-2); }
+/* 状态方块（非圆点）：像素语言里状态即像素 */
+.qdot { width: 9px; height: 9px; flex: none; }
+.qdot.done { background: var(--ok); }
+.qdot.run { background: var(--accent); animation: qpulse 1.1s steps(2) infinite; }
+.qdot.wait { background: none; border: 2px solid var(--ink-3); }
+.qdot.err { background: var(--bad); }
+.qdot.skip { background: var(--ink-3); }
+@keyframes qpulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .qdot.run { animation: none; } }
+
+/* ── Toast ─────────────────────────────────────────────────────────
+   手机上浮在标签栏之上（否则会盖住导航），并让开底部安全区。 */
+#toasts {
+  position: fixed; left: 12px; right: 12px; z-index: var(--z-toast);
+  bottom: calc(var(--tabs-h) + 12px);
+  display: flex; flex-direction: column; gap: 8px; align-items: stretch;
+}
 .tst {
   background: var(--raise); border: 2px solid var(--line); border-left: 4px solid var(--ink-3);
-  padding: 10px 14px; font-size: 12.5px; box-shadow: var(--shadow); max-width: 380px;
+  padding: 10px 13px; font-size: 12.5px; box-shadow: var(--shadow);
 }
 .tst.ok { border-left-color: var(--ok); } .tst.err { border-left-color: var(--bad); }
 
-@media (max-width: 760px) {
-  .shell { grid-template-columns: 1fr; }
-  .nav { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; border-right: none; border-bottom: 2px solid var(--line); }
-  .nav ul { display: flex; padding: 8px; } .nav .sig { border: none; }
-  .stat { border-right: none; border-bottom: 1px solid var(--line-soft); }
+/* ── 平板：两列卡片、三列观测条 ─────────────────────────────────── */
+@media (min-width: 620px) {
+  .stat { padding: 13px 15px; }
+  .stat .v { font-size: 24px; }
+  .stats { grid-template-columns: repeat(3, 1fr); }
+  .statusbar .copyrow { flex-basis: auto; }
+  .statusbar .copyrow button { width: auto; }
+  .cards { grid-template-columns: 1fr 1fr; gap: 0; }
+  .card { border-right: 1px solid var(--line-soft); }
+  .card:nth-child(2n) { border-right: none; }
+  .stasks { grid-template-columns: repeat(3, 1fr); }
+  .hero .side { grid-template-columns: repeat(4, 1fr); }
+  .dlg { border-bottom: 2px solid var(--accent); }
+  .veil.on { align-items: center; padding: 20px; }
+  .dlg { max-width: 620px; }
+  .dlg footer button { flex: 0 0 auto; }
+  .dlg footer .grow { flex: 1; }
+  .dlg .body { padding: 16px; }
+  .dlg header { padding: 15px 18px 12px; }
+  .dlg footer { padding: 12px 18px; }
+  .grid2 { grid-template-columns: 1fr 1fr; gap: 0 20px; }
+  .grid3 { grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  .qrow .bot { display: none; }
+  .qrow .msg { margin-top: 3px; }
+  .card .acts { flex-wrap: wrap; overflow: visible; }
 }
+
+/* ── 桌面：左侧栏 + 多列网格 ───────────────────────────────────────
+   同一套 DOM：底部标签栏变成左侧栏，卡片网格铺到 2–3 列，
+   观测条一行 6 格，配置表单回到三列。 */
+@media (min-width: 980px) {
+  :root { --tabs-h: 0px; }
+  .app {
+    display: grid; grid-template-columns: 216px 1fr;
+    grid-template-rows: auto 1fr; grid-template-areas: "nav top" "nav views";
+    height: 100%;
+  }
+  .topbar { grid-area: top; padding-top: 12px; padding-bottom: 12px; }
+  /* 桌面顶栏宽度充裕，恢复品牌文字（手机上隐藏是为了给主操作让位）。 */
+  .topbar .brand b { display: block; font-size: 13px; }
+  .topbar .path { display: inline; }
+  .views { grid-area: views; }
+  .view { padding: 20px 22px 44px; max-width: 1240px; width: 100%; }
+
+  .tabbar {
+    grid-area: nav; position: static; bottom: auto;
+    display: flex; flex-direction: column; gap: 0;
+    grid-template-columns: none; border-top: none; border-right: 2px solid var(--line);
+    padding-bottom: 0; overflow-y: auto;
+  }
+  .tabbar a {
+    flex-direction: row; justify-content: flex-start; gap: 10px;
+    min-height: 40px; padding: 8px 12px; font-size: 12.5px;
+    border-top: none; border-left: 3px solid transparent;
+  }
+  .tabbar a svg { width: 16px; height: 16px; }
+  .tabbar a.on { border-left-color: var(--accent); font-weight: 700; }
+  .tabbar .navsig {
+    display: block; margin-top: auto; padding: 12px; border-top: 1px solid var(--line-soft);
+    font-size: 11px; color: var(--ink-3); line-height: 1.7;
+  }
+  .tabbar .navsig .row { display: flex; align-items: center; gap: 7px; }
+
+  /* 桌面观测条：六格一行，但「积分剩余 / 总额」装两个数，多给它一点宽度。 */
+  .stats { grid-template-columns: repeat(4, 1fr) 1.35fr 1fr; }
+  .stat.credits .v { font-size: 21px; }
+  .statusbar .copyrow { flex-basis: auto; margin-left: auto; }
+  .statusbar .copyrow button { width: auto; min-height: 30px; }
+  .cards { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+  .card { border-right: 1px solid var(--line-soft); }
+  .card:nth-child(2n) { border-right: 1px solid var(--line-soft); }
+  .grid3 { grid-template-columns: 1fr 1fr 1fr; }
+  .plot { height: 196px; }
+  #logBox { max-height: 440px; }
+  .hero .top { display: flex; align-items: flex-end; gap: 30px; flex-wrap: wrap; }
+  .hero .big b { font-size: 40px; }
+  .hero .side { display: flex; gap: 26px; margin-left: auto; margin-top: 0; flex-wrap: wrap; }
+  .srow { display: grid; grid-template-columns: minmax(150px, 210px) 1fr auto; gap: 14px; align-items: center; padding: 12px 15px; }
+  .srow .luck { margin-top: 0; }
+  .shead {
+    display: grid; grid-template-columns: minmax(150px, 210px) 1fr auto;
+    gap: 14px; align-items: center; padding: 9px 15px 7px;
+    font-size: 10.5px; color: var(--ink-3); border-bottom: 1px solid var(--line-soft);
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .shead .stasks { margin-top: 0; }
+  .stasks { grid-template-columns: repeat(5, minmax(64px, 1fr)); }
+  .qrow { display: grid; grid-template-columns: 118px 1fr 52px 84px minmax(120px, 240px); gap: 10px; align-items: center; padding: 7px 15px; }
+  .qrow:hover { background: var(--surface-2); }
+  .qrow .code { grid-column: 1; max-width: none; }
+  .qrow .name { grid-column: 2; flex: none; }
+  .qrow .prog { grid-column: 3; text-align: right; }
+  .qrow .st { grid-column: 4; }
+  .qrow .msg { grid-column: 5; flex-basis: auto; }
+  #toasts { left: auto; right: 20px; bottom: 20px; align-items: flex-end; }
+  .tst { max-width: 380px; }
+  /* 桌面用双栏并排的排行表 */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  .duo > .box { margin-bottom: 0; }
+  .duo .rows { grid-template-columns: 1fr; }
+}
+@media (min-width: 980px) and (max-width: 1080px) { .duo { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-<div class="shell">
-  <nav class="nav">
+<div class="app">
+  <header class="topbar">
     <div class="brand">
-      <div class="name">
-        <!-- 像素 Buddy 猫头：16×16 网格，16 个 rect 拼出双耳方脸 + 挖空双眼 + 鼻 -->
-        <svg class="logo" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="1" width="2" height="1"/><rect x="11" y="1" width="2" height="1"/><rect x="2" y="2" width="4" height="1"/><rect x="10" y="2" width="4" height="1"/><rect x="2" y="3" width="12" height="1"/><rect x="1" y="4" width="14" height="3"/><rect x="1" y="7" width="3" height="2"/><rect x="6" y="7" width="4" height="2"/><rect x="12" y="7" width="3" height="2"/><rect x="1" y="9" width="14" height="1"/><rect x="1" y="10" width="6" height="1"/><rect x="9" y="10" width="6" height="1"/><rect x="1" y="11" width="14" height="1"/><rect x="2" y="12" width="12" height="1"/><rect x="3" y="13" width="10" height="1"/><rect x="4" y="14" width="8" height="1"/></svg>
-        workbuddy-free
-      </div>
-      <div class="sub" id="navSub">控制台</div>
+      <!-- 像素 Buddy 猫头：16×16 网格，16 个 rect 拼出双耳方脸 + 挖空双眼 + 鼻 -->
+      <svg class="logo" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="1" width="2" height="1"/><rect x="11" y="1" width="2" height="1"/><rect x="2" y="2" width="4" height="1"/><rect x="10" y="2" width="4" height="1"/><rect x="2" y="3" width="12" height="1"/><rect x="1" y="4" width="14" height="3"/><rect x="1" y="7" width="3" height="2"/><rect x="6" y="7" width="4" height="2"/><rect x="12" y="7" width="3" height="2"/><rect x="1" y="9" width="14" height="1"/><rect x="1" y="10" width="6" height="1"/><rect x="9" y="10" width="6" height="1"/><rect x="1" y="11" width="14" height="1"/><rect x="2" y="12" width="12" height="1"/><rect x="3" y="13" width="10" height="1"/><rect x="4" y="14" width="8" height="1"/></svg>
+      <b>workbuddy-free</b>
     </div>
-    <ul>
-      <li><a href="#accounts" data-view="accounts" class="on">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.6"/><path d="M2.8 13.5c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4"/></svg>
-        账号池</a></li>
-      <li><a href="#stats" data-view="stats">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 13.5h12"/><path d="M4.2 13.5V8.6M8 13.5V4.2M11.8 13.5V6.8"/></svg>
-        用量统计</a></li>
-      <li><a href="#taskscenter" data-view="taskscenter">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2.5h10v9H8l-3 3v-3H3z"/><path d="M6 6.5h4M6 9h2.5"/></svg>
-        任务中心</a></li>
-      <li><a href="#models" data-view="models">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/></svg>
-        模型与档位</a></li>
-      <li><a href="#config" data-view="config">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
-        配置</a></li>
-      <li><a href="#logs" data-view="logs">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7"/></svg>
-        运行日志</a></li>
-    </ul>
-    <div class="sig">
-      <div class="row"><span class="pulse" id="navPulse"></span><span id="navState">连接中</span></div>
-      <div class="row" style="margin-top:5px"><span id="navVer">v-</span> · <span id="navRedis">-</span></div>
-      <div class="row credit">Patrick优化</div>
-    </div>
-  </nav>
+    <span class="path" id="ttl">/ 账号池</span>
+    <span class="grow"></span>
+    <button class="icon ghost" id="btnTheme" title="切换明暗" aria-label="切换主题">
+      <svg id="icoTheme" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/></svg>
+    </button>
+    <button class="icon ghost" id="btnRefresh" title="刷新余额" aria-label="刷新余额">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-4"/><path d="M13.6 1.6v3h-3"/></svg>
+    </button>
+    <button class="primary" id="btnAdd">添加账号</button>
+  </header>
 
-  <div class="main">
-    <div class="topbar">
-      <h2 id="ttl">账号池</h2>
-      <span class="sep">/</span>
-      <span class="meta" id="subMeta">-</span>
-      <div class="grow"></div>
-      <button class="icon ghost" id="btnTheme" title="切换明暗（跟随系统 → 浅色 → 深色）" aria-label="切换主题">
-        <svg id="icoTheme" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/></svg>
-      </button>
-      <button id="btnRefresh">刷新</button>
-      <button class="primary" id="btnAdd">添加账号</button>
-    </div>
-
-    <!-- 账号池 -->
+  <main class="views">
+    <!-- ── 账号池 ─────────────────────────────────────────────────── -->
     <section class="view" id="view-accounts">
+      <div class="statusbar">
+        <span class="pulse" id="navPulse"></span>
+        <span id="navState">连接中</span>
+        <span class="sep">·</span>
+        <span id="subMeta">—</span>
+        <span class="sep">·</span>
+        <span id="navVer">v-</span>
+        <span class="sep">·</span>
+        <span id="navRedis">-</span>
+        <!-- 自己这个地址：其它设备在浏览器里打开就能进同一套面板（需输入 api_key）。
+             手机上从原生应用进来时地址是 127.0.0.1，对别人没用，故同时提示局域网访问方式。 -->
+        <span class="copyrow"><button class="xs" id="btnShare" title="复制本机访问地址">复制访问地址（给其它设备）</button></span>
+      </div>
+
       <div class="stats">
         <div class="stat"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
         <div class="stat good"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
         <div class="stat warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
         <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
-        <div class="stat"><div class="v" id="sCredits">-</div><div class="k">积分剩余 / 总额</div></div>
+        <div class="stat credits"><div class="v" id="sCredits">-</div><div class="k">积分剩余 / 总额</div></div>
         <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
       </div>
 
@@ -608,25 +650,18 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
           <h3>账号池</h3>
           <span class="grow"></span>
           <span class="note" id="accNote"></span>
+        </header>
+        <div class="actions">
           <button class="xs" id="btnCheckinAll">全部签到</button>
           <button class="xs" id="btnTravelAll">旅行巡检</button>
           <button class="xs" id="btnActivityAll">活跃上报</button>
           <button class="xs" id="btnKeepaliveAll">全部保活</button>
-        </header>
-        <div class="tbl-wrap">
-        <table class="acc">
-          <thead><tr>
-            <th class="mark" aria-hidden="true"></th>
-            <th>账号</th><th>状态</th><th>积分</th>
-            <th>成功 / 失败</th><th>在途</th><th>用量</th><th>最近成功</th><th class="c-acts"></th>
-          </tr></thead>
-          <tbody id="accBody"></tbody>
-        </table>
         </div>
+        <div class="cards" id="accBody"></div>
       </div>
     </section>
 
-    <!-- 用量统计 -->
+    <!-- ── 用量统计 ───────────────────────────────────────────────── -->
     <section class="view" id="view-stats" hidden>
       <!-- 累计头条。口径是"自统计启用起"，与下方时间序列同一个聚合器，故上下永远自洽；
            池的历史总账（统计功能上线之前，只有总数没有按日明细）降级在脚注里作参照。 -->
@@ -683,36 +718,26 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
       <div class="duo">
         <div class="box">
           <header><h3>模型分布</h3><span class="grow"></span><span class="note" id="mdStatNote"></span></header>
-          <div class="tbl-wrap">
-            <table class="acc md">
-              <thead><tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>TOKEN</th><th>占比</th><th>请求</th><th>输入 / 输出</th></tr></thead>
-              <tbody id="mdStatBody"></tbody>
-            </table>
-          </div>
+          <div class="rows" id="mdStatBody"></div>
         </div>
         <div class="box">
           <header><h3>账号用量</h3><span class="grow"></span><span class="note" id="acStatNote"></span></header>
-          <div class="tbl-wrap">
-            <table class="acc md">
-              <thead><tr><th class="mark" aria-hidden="true"></th><th>账号</th><th>TOKEN</th><th>占比</th><th>请求</th><th>失败</th></tr></thead>
-              <tbody id="acStatBody"></tbody>
-            </table>
-          </div>
+          <div class="rows" id="acStatBody"></div>
         </div>
       </div>
     </section>
 
-    <!-- 任务中心 -->
+    <!-- ── 任务中心 ───────────────────────────────────────────────── -->
     <section class="view" id="view-taskscenter" hidden>
       <div class="box">
         <header>
-          <h3>开学季 <span class="hint">09-13 ~ 09-24 · 每日重置</span></h3>
+          <h3>开学季</h3>
           <span class="grow"></span>
           <span class="note" id="schoolSummary"></span>
           <button class="xs" id="btnSchoolRefresh">刷新</button>
-          <button class="xs primary" id="btnSchoolRunAll">全部账号执行闭环</button>
+          <button class="xs primary" id="btnSchoolRunAll">全部执行</button>
         </header>
-        <div class="state" id="schoolState"><span class="dots">加载中</span></div>
+        <div class="state" id="schoolState" style="padding:12px 13px"><span class="dots">加载中</span></div>
         <div id="schoolList"></div>
       </div>
 
@@ -724,7 +749,7 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
             <select id="qcConc"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option></select>
           </label>
           <button class="xs" id="btnScanAll">扫描待办</button>
-          <button class="xs primary" id="btnRunQueue">执行全部待办</button>
+          <button class="xs primary" id="btnRunQueue">执行全部</button>
         </header>
         <div class="qprog" id="qProg" hidden>
           <div class="qbar"><i id="qBarFill"></i></div>
@@ -743,7 +768,7 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
       </div>
     </section>
 
-    <!-- 模型与档位 -->
+    <!-- ── 模型与档位 ─────────────────────────────────────────────── -->
     <section class="view" id="view-models" hidden>
       <div class="box">
         <header>
@@ -752,16 +777,11 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
           <span class="note" id="mdNote">实时查询上游</span>
           <button class="xs" id="btnModels">重新获取</button>
         </header>
-        <div class="tbl-wrap">
-        <table class="acc md">
-          <thead><tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th><th>默认档</th><th>支持的思考档位</th><th>上下文长度</th><th>最大输出</th></tr></thead>
-          <tbody id="mdBody"></tbody>
-        </table>
-        </div>
+        <div class="rows" id="mdBody"></div>
       </div>
     </section>
 
-    <!-- 配置 -->
+    <!-- ── 配置 ───────────────────────────────────────────────────── -->
     <section class="view" id="view-config" hidden>
       <form id="cfgForm">
         <div class="box">
@@ -769,12 +789,12 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
           <div class="pad">
             <div class="grid2">
               <label class="fld"><span class="lb">监听地址</span>
-                <input name="listen" placeholder=":7863">
+                <input name="listen" placeholder=":3012">
                 <span class="hint">改动需重启进程</span></label>
               <label class="fld"><span class="lb">API 密钥</span>
                 <div class="inline"><input name="api_key" id="cfgKey" type="password" placeholder="留空 = 不鉴权">
                 <button type="button" class="xs" id="btnEye">显示</button></div>
-                <span class="hint">立即生效（含面板自身）</span></label>
+                <span class="hint">立即生效（含面板自身）；其它设备访问面板需要它</span></label>
             </div>
           </div>
         </div>
@@ -916,48 +936,73 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
       </form>
     </section>
 
-    <!-- 日志 -->
+    <!-- ── 运行日志 ───────────────────────────────────────────────── -->
     <section class="view" id="view-logs" hidden>
       <div class="box">
         <header>
           <h3>运行日志</h3>
           <span class="grow"></span>
+          <span class="note" id="logNote">最近 500 行</span>
+        </header>
+        <div class="actions">
           <span class="chips" id="logChips">
             <button class="xs chip on" data-ch="all">全部</button>
             <button class="xs chip" data-ch="task">任务</button>
             <button class="xs chip" data-ch="chat">对话</button>
             <button class="xs chip" data-ch="sys">系统</button>
           </span>
-          <span class="note" id="logNote">最近 500 行</span>
+          <span class="grow" style="flex:1"></span>
           <button class="xs" id="btnLogPin">自动滚动：开</button>
-        </header>
+        </div>
         <pre id="logBox"></pre>
       </div>
     </section>
-  </div>
+  </main>
+
+  <nav class="tabbar" id="mainNav">
+    <a href="#accounts" data-view="accounts" class="on">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.6"/><path d="M2.8 13.5c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4"/></svg>
+      <span>账号池</span></a>
+    <a href="#stats" data-view="stats">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 13.5h12"/><path d="M4.2 13.5V8.6M8 13.5V4.2M11.8 13.5V6.8"/></svg>
+      <span>统计</span></a>
+    <a href="#taskscenter" data-view="taskscenter">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2.5h10v9H8l-3 3v-3H3z"/><path d="M6 6.5h4M6 9h2.5"/></svg>
+      <span>任务</span></a>
+    <a href="#models" data-view="models">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/></svg>
+      <span>模型</span></a>
+    <a href="#config" data-view="config">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
+      <span>配置</span></a>
+    <a href="#logs" data-view="logs">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7"/></svg>
+      <span>日志</span></a>
+    <!-- 桌面侧栏底部：手机端隐藏（避免占用底部导航空间） -->
+    <div class="navsig">
+      <div class="row credit">Patrick优化</div>
+    </div>
+  </nav>
 </div>
 
 <!-- 积分任务 -->
 <div class="veil" id="taskVeil">
-  <div class="dlg" style="width:940px">
+  <div class="dlg">
     <header>
       <h3>积分任务 <span class="hint" id="taskWho"></span></h3>
       <div class="hint">查询上游任务进度；「接受」为报名（幂等），「领取」在进度达标后可用。所有操作走网关，无需外部脚本。</div>
     </header>
     <div class="body">
       <div class="state" id="taskState"><span class="dots">加载中</span></div>
-      <div class="tbl-wrap">
-        <table class="acc md" id="taskTable" hidden>
-          <thead><tr><th class="mark" aria-hidden="true"></th><th>任务</th><th>进度</th><th>奖励</th><th>状态</th><th class="c-acts"></th></tr></thead>
-          <tbody id="taskBody"></tbody>
-        </table>
+      <div id="taskTable" hidden>
+        <div class="rows" id="taskBody"></div>
       </div>
     </div>
     <footer>
       <span class="grow"></span>
-      <button id="btnTaskAcceptAll">全部接受</button>
-      <button id="btnTaskAutoAll" class="primary">一键完成可自动任务</button>
       <button id="btnTaskReload">重新查询</button>
+      <button id="btnTaskAcceptAll">全部接受</button>
+      <button id="btnTaskAutoAll" class="primary">一键完成</button>
       <button id="btnCloseTask">关闭</button>
     </footer>
   </div>
@@ -973,11 +1018,11 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
     <div class="body">
       <div id="addPick">
         <div class="realm-row">
-          <span class="hint" style="font-size:12px">版本：</span>
+          <span class="hint">版本：</span>
           <label class="realm-opt"><input type="radio" name="addRealm" value="cn" checked> 国内版（CN）</label>
           <label class="realm-opt"><input type="radio" name="addRealm" value="global"> 国际版（Global）</label>
         </div>
-        <div class="hint" style="font-size:12px;margin-top:2px">国际版登录后，网关自动完成注册地区、激活与试用额度领取，全程无需手动操作。</div>
+        <div class="hint" style="margin-top:8px">国际版登录后，网关自动完成注册地区、激活与试用额度领取，全程无需手动操作。</div>
       </div>
       <div id="addLoad" class="state" hidden><span class="dots">正在获取授权链接</span></div>
       <div id="addReady" hidden>
@@ -1000,10 +1045,10 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
 
 <!-- 密钥 -->
 <div class="veil" id="keyVeil" data-lock="1">
-  <div class="dlg" style="width:420px">
+  <div class="dlg">
     <header>
       <h3>需要访问密钥</h3>
-      <div class="hint">该网关已启用 api_key 鉴权，请输入 config.json 中的密钥。</div>
+      <div class="hint">该网关已启用 api_key 鉴权。密钥在运行网关那台设备的「配置」页（config.json 的 api_key），输入一次即记住。</div>
     </header>
     <div class="body">
       <input type="password" id="keyInput" placeholder="api_key" autocomplete="current-password">

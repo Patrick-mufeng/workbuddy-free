@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 面板本身是深色主题，状态栏跟随，避免顶部出现亮色断层。 -->
+    <style name="Theme.WorkBuddyFree" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/surface</item>
+    </style>
+</resources>

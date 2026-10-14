@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动图标前景：像素猫头，缩到安全区内（外层 108dp，内容居中约 2/3）。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+    <group
+        android:scaleX="0.55"
+        android:scaleY="0.55"
+        android:translateX="7.2"
+        android:translateY="7.2">
+        <path
+            android:fillColor="#FF2AD4E8"
+            android:pathData="M6,2h4v2h-4zM22,2h4v2h-4zM4,4h8v2h-8zM20,4h8v2h-8zM4,6h24v2h-24zM2,8h28v6h-28zM2,14h6v4h-6zM12,14h8v4h-8zM24,14h6v4h-6zM2,18h28v2h-28zM2,20h12v2h-12zM18,20h12v2h-12zM2,22h28v2h-28zM4,24h24v2h-24zM6,26h20v2h-20zM8,28h16v2h-16z" />
+    </group>
+</vector>

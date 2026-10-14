@@ -62,5 +62,8 @@ stop-gateway.bat
 
 # 本地验证工具（判据逆向过程脚本；对应结论笔记属本地工作文档，未随仓库分发）
 /cmd/desktopverify*/
+# 本机专用探针（硬编码本地仓库路径，换机器即失效，不入库）
+scripts/probe_credits.py
+scripts/probe_credits_fields.py
 *.zip
 server.exe

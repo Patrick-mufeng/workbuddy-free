@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WorkBuddy 网关</string>
+
+    <string name="notif_channel">网关运行状态</string>
+    <string name="notif_channel_desc">显示本地网关的运行状态</string>
+    <string name="notif_title">WorkBuddy 网关运行中</string>
+    <string name="notif_text">正在本机提供 OpenAI 兼容接口</string>
+
+    <string name="status_running">网关运行中</string>
+    <string name="status_stopped">网关未运行</string>
+    <string name="btn_start">启动</string>
+    <string name="btn_stop">停止</string>
+
+    <string name="addr_label">局域网地址</string>
+    <string name="addr_unknown">—</string>
+    <string name="btn_copy">复制</string>
+    <string name="addr_copied">已复制：%1$s</string>
+
+    <string name="err_bin_missing">未找到网关程序：%1$s</string>
+    <string name="err_bin_not_exec">网关程序不可执行：%1$s</string>
+    <string name="err_start_failed">启动失败：%1$s</string>
+    <string name="err_no_browser">没有可用的浏览器</string>
+</resources>

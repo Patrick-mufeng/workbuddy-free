@@ -131,6 +131,12 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("GET /healthz", h.healthz)
 	if cfg.Panel != nil {
 		h.mux.Handle("/panel/", cfg.Panel) // /panel → /panel/ 由 ServeMux 自动重定向
+		// 根路径直接送到面板：局域网内其它设备只需在浏览器输入 "http://<网关IP>:3012"
+		// 就能打开管理界面，不用记 /panel/ 后缀。302 而非 301——面板路径若将来变动，
+		// 301 会被浏览器永久缓存，用户清不掉。
+		h.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/panel/", http.StatusFound)
+		})
 	}
 	return h
 }

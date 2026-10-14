@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏小图标：必须在视觉上是单色剪影，这里用与面板同一只像素猫头。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M3,1h2v1h-2zM11,1h2v1h-2zM2,2h4v1h-4zM10,2h4v1h-4zM2,3h12v1h-12zM1,4h14v3h-14zM1,7h3v2h-3zM6,7h4v2h-4zM12,7h3v2h-3zM1,9h14v1h-14zM1,10h6v1h-6zM9,10h6v1h-6zM1,11h14v1h-14zM2,12h12v1h-12zM3,13h10v1h-10zM4,14h8v1h-8z" />
+</vector>

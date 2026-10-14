@@ -220,6 +220,9 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"disabled":        disabled,
 		"in_flight_full":  inFlightFull,
 		"accounts":        p.cfg.Pool.List(),
+		// 面板地址：本机视角是 127.0.0.1，其它设备视角是局域网 IP。
+		// 前端「复制访问地址」用它，用户不必自己找 IP。
+		"panel_url": accessURL(r),
 	})
 }
 

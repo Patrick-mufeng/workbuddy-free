@@ -1,6 +1,16 @@
 /* workbuddy-free · 面板前端逻辑（内联脚本被 CSP 禁止，故独立成文件）
  *
  * Patrick优化
+ *
+ * ── 手机优先（本次重写的核心）────────────────────────────────────────
+ * 原来的渲染目标是桌面宽表：账号池 9 列、模型 7 列，手机上必须横向滚动，
+ * 一屏只能看到两三列，"看一眼状态"这件事变得很难。重写后：
+ *   · 账号 → 卡片（.card）：状态色条 + 身份 + 积分 + 四个关键指标 + 操作，
+ *     竖着读完一张卡就是一个账号的全部信息；
+ *   · 模型 / 排行 → 行卡（.row）：标题一行、指标一行；
+ *   · 触控：所有操作按钮 ≥34px；图表点选改成 pointer 事件（手指按下即读数）。
+ * 布局在 CSS 里自适应（手机单列 → 平板双列 → 桌面多列），JS 只负责生成同一套
+ * 结构，不为窄屏另写一份模板——两套模板迟早会漂移。
  */
 'use strict';
 /* ── 状态 ─────────────────────────────────────────────────────────── */
@@ -15,6 +25,8 @@ let refTimer = null;
 let statsRng = '30d', statsData = null, statsPainted = false;
 // 图表当前的点位与峰值：读数槽、悬停高亮、错误降级态都要读这几个。
 let chartPts = [], chartPeak = null, chartPeakIdx = -1;
+// panelURL 后端给的「其它设备可用」的面板地址，复制按钮用它（见 loadOverview）。
+let panelURL = '';
 
 const $ = id => document.getElementById(id);
 
@@ -26,6 +38,9 @@ function effTheme() {
 function applyTheme() {
   const eff = effTheme();
   document.documentElement.dataset.theme = eff;
+  // 状态栏/地址栏跟随主题（手机浏览器上尤其明显）
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.content = eff === 'light' ? '#e9edf3' : '#0b0e14';
   $('icoTheme').innerHTML = eff === 'light'
     ? '<circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M12.8 3.2l-1.4 1.4M4.6 11.4l-1.4 1.4"/>'
     : '<path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8z"/>';
@@ -86,7 +101,6 @@ function dur(sec) {
 
 // formatTokenCount 中文数量级：万 / 亿 / 万亿（步进 1e4，与国内读数习惯一致）。
 // 一万以下走千分位；四舍五入后越界就升级单位，避免出现"10000万"这种写法。
-// 注：原先是 k/m/b，与账号池的用量列共用这一个口径，两处一起变成中文单位。
 function formatTokenCount(tokens) {
   if (tokens == null || tokens === '') return '—';
   const n = Number(tokens);
@@ -139,8 +153,12 @@ const TITLES = { accounts: '账号池', stats: '用量统计', taskscenter: '任
 function go(v) {
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
-  document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
-  $('ttl').textContent = TITLES[v];
+  document.querySelectorAll('.tabbar a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
+  $('ttl').textContent = '/ ' + TITLES[v];
+  document.title = 'workbuddy-free · ' + TITLES[v];
+  // 切页回到顶部：手机上页面很长，从"日志"底部切到"账号池"应该落在顶部。
+  const vs = document.querySelector('.views');
+  if (vs) vs.scrollTop = 0;
   if (v === 'models' && !$('mdBody').children.length) loadModels();
   if (v === 'config') loadConfig();
   if (v === 'logs') loadLogs();
@@ -149,19 +167,22 @@ function go(v) {
   if (v === 'stats') { statsPainted = false; loadStats(true); }
   if (v === 'taskscenter') { loadSchoolStatus(true); pollQueueOnce(); }
 }
-document.querySelectorAll('.nav a').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); history.replaceState(null, '', '#' + a.dataset.view); });
+document.querySelectorAll('.tabbar a').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); history.replaceState(null, '', '#' + a.dataset.view); });
 go((location.hash || '#accounts').slice(1) in TITLES ? (location.hash || '#accounts').slice(1) : 'accounts');
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
+// renderAccounts 生成账号卡片。信息层级（手机上一屏一张卡）：
+//   ① 昵称 + 状态标签   ② uid   ③ 积分（大字 + 量条）   ④ 四项指标   ⑤ 操作
+// 桌面用 CSS 网格铺成多列，DOM 完全一致。
 function renderAccounts(list) {
-  const tb = $('accBody');
+  const box = $('accBody');
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>';
+    box.innerHTML = '<div class="empty"><div class="big">账号池是空的</div>点右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div>';
     return;
   }
   // 有总额度（credits_total）→ 进度条按自身 剩余/总额 百分比；旧数据无总额 → 退回池内最高=100%
   const maxCred = Math.max(1, ...list.map(s => s.credits || 0));
-  tb.innerHTML = list.map(s => {
+  box.innerHTML = list.map(s => {
     const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0);
     let cls = '', tag;
@@ -170,44 +191,55 @@ function renderAccounts(list) {
       cls = 'cool';
       const kind = bl > (s.cool_remaining_sec || 0) ? '熔断' : (s.cool_kind === 'hard_credit' ? '积分冷却' : '限流冷却');
       tag = '<span class="tag warn">' + kind + ' · ' + dur(cool) + '</span>';
-    } else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
-    const note = s.reason ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' + esc(s.reason) + '</div>' : '';
-    const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
-    const cred = s.credits == null ? '—' : (s.credits_total > 0 ? s.credits + '<span class="of">/' + s.credits_total + '</span>' : String(s.credits));
+    } else tag = '<span class="tag ok">可用</span>';
+    const note = s.reason ? '<div class="note">' + esc(s.reason) + '</div>' : '';
+    const short = s.uid.length > 20 ? s.uid.slice(0, 20) + '…' : s.uid;
+    const cred = s.credits == null ? '—' : formatInt(s.credits);
+    const credTotal = s.credits_total > 0 ? '<span class="of">/ ' + formatInt(s.credits_total) + '</span>' : '';
     const pct = s.credits_total > 0
       ? Math.min(100, Math.round((s.credits || 0) / s.credits_total * 100))
       : Math.round((s.credits || 0) / maxCred * 100);
-    const credTip = s.credits_total > 0 ? '剩余 ' + s.credits + ' / 总额 ' + s.credits_total + '（' + pct + '%）' : '积分（相对池内最高）';
     const frozen = s.disabled || cool > 0;
     const tu = s.token_usage || {};
     const req = tu.request_count || 0;
-    const totalTok = formatTokenCount(tu.total_tokens);
-    const totalTokUnit = totalTok === '—' ? '' : '<em>tok</em>';
     const latency = formatLatency(tu.last_latency_ms);
     const rate = formatRate(tu.last_tokens_per_second);
-    const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
-    return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
-      '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
-      '<td>' + tag + note + '</td>' +
-      '<td class="cred" title="' + credTip + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
-      '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
-      '<td class="num">' + (s.in_flight || 0) + '</td>' +
-      '<td class="num usage-cell" title="' + esc(usageTitle) + '"><span class="usage-line" aria-label="' + esc(usageTitle) + '">' +
-        '<span class="usage-item usage-count"><b>' + req + '</b><em>次</em></span>' +
-        '<span class="usage-item usage-total"><b>' + totalTok + '</b>' + totalTokUnit + '</span>' +
-        '<span class="usage-item usage-latency"><b>' + latency + '</b></span>' +
-        '<span class="usage-item usage-rate"><b>' + rate + '</b></span>' +
-      '</span></td>' +
-      '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
-      '<td class="acts">' +
-        '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '">签到</button>' +
-        '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '">余额</button>' +
-        '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' +
-        (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
-                : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>') +
-        '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>' +
-      '</td></tr>';
+    // 卡片上速率只给数字（单位进标签），否则 "41.5tok/s" 在窄格子里会被截成 "41.s"。
+    const rateShort = rate === '—' ? rate : rate.replace(/tok\/s$/, '');
+    const usageTip = '最近一次：' + req + ' 次 / ' + formatTokenCount(tu.total_tokens) + ' / 延迟 ' + latency + ' / ' + rate;
+    return '<article class="card ' + cls + '">' +
+      '<div class="r1">' +
+        '<span class="nm">' + (s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + '</span>' +
+        (s.realm === 'global' ? '<span class="realm-tag">国际版</span>' : '') +
+        '<span class="sp"></span>' + tag +
+      '</div>' +
+      '<div class="r2"><span class="uid" title="uid: ' + esc(s.uid) + '">' + esc(short) + '</span></div>' +
+      note +
+      '<div class="cred" title="' + (s.credits_total > 0 ? '剩余 ' + s.credits + ' / 总额 ' + s.credits_total + '（' + pct + '%）' : '积分（相对池内最高）') + '">' +
+        '<div class="top"><b>' + cred + '</b>' + credTotal + '<span class="sp" style="flex:1"></span><span class="lb">积分</span></div>' +
+        '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+      '</div>' +
+      '<div class="mets" title="' + esc(usageTip) + '">' +
+        '<div class="met"><b>' + formatInt(req) + '</b><span>请求</span></div>' +
+        '<div class="met"><b>' + formatTokenCount(tu.total_tokens) + '</b><span>TOKEN</span></div>' +
+        '<div class="met"><b>' + latency + '</b><span>延迟</span></div>' +
+        '<div class="met"><b>' + rateShort + '</b><span>tok/s</span></div>' +
+      '</div>' +
+      '<div class="mets" style="margin-top:8px">' +
+        '<div class="met"><b>' + (s.success_count || 0) + '</b><span>成功</span></div>' +
+        '<div class="met bad"><b>' + (s.err_total || 0) + '</b><span>失败</span></div>' +
+        '<div class="met"><b>' + (s.in_flight || 0) + '</b><span>在途</span></div>' +
+        '<div class="met"><b>' + ago(s.last_success) + '</b><span>最近成功</span></div>' +
+      '</div>' +
+      '<div class="acts">' +
+        '<button data-a="checkin" data-u="' + esc(s.uid) + '">签到</button>' +
+        '<button data-a="balance" data-u="' + esc(s.uid) + '">余额</button>' +
+        '<button data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' +
+        (frozen ? '<button class="primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
+                : '<button data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>') +
+        '<button class="danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>' +
+      '</div>' +
+    '</article>';
   }).join('');
 }
 
@@ -219,13 +251,15 @@ async function loadOverview(quiet) {
     $('sCooling').textContent = d.cooling;
     $('sDisabled').textContent = d.disabled;
     const remSum = (d.accounts || []).reduce((a, s) => a + (s.credits || 0), 0);
-  const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
-  $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
+    const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
+    $('sCredits').textContent = totSum > 0 ? formatInt(remSum) + '/' + formatInt(totSum) : formatInt(remSum);
     $('sSticky').textContent = d.sticky_sessions;
-    // 版本号只在侧栏底部的 #navVer 显示一处；#navSub 保留静态副标题，
-    // 此前两处都写版本号，视觉上重复。
     $('navVer').textContent = 'v' + d.version;
     $('navRedis').textContent = d.redis_mode === 'upstash' ? 'Redis 镜像' : '本地内存';
+    // 「复制访问地址」：后端按请求视角推导（本机是 127.0.0.1，其它设备是局域网 IP），
+    // 没有可用地址（无网卡/无 LAN）时隐藏按钮，而不是复制一个连不上的地址。
+    panelURL = d.panel_url || '';
+    $('btnShare').hidden = !panelURL;
     $('navState').textContent = d.healthy > 0 ? '服务正常' : (d.total ? '无可用账号' : '待添加账号');
     const p = $('navPulse');
     p.className = 'pulse' + (d.healthy > 0 ? '' : (d.total ? ' warn' : ' bad'));
@@ -285,27 +319,36 @@ $('btnActivityAll').onclick = async () => {
 
 /* ── 模型 ─────────────────────────────────────────────────────────── */
 async function loadModels() {
-  const tb = $('mdBody');
-  tb.innerHTML = '<tr><td colspan="7"><div class="empty">正在向上游查询…</div></td></tr>';
+  const box = $('mdBody');
+  box.innerHTML = '<div class="empty">正在向上游查询…</div>';
   try {
     const d = await api('models');
     const list = d.models || [];
-    if (!list.length) { tb.innerHTML = '<tr><td colspan="7"><div class="empty">上游未返回模型</div></td></tr>'; return; }
-    tb.innerHTML = list.map(m => {
+    if (!list.length) { box.innerHTML = '<div class="empty">上游未返回模型</div>'; return; }
+    box.innerHTML = list.map(m => {
       const eff = (m.supported_efforts || []).slice();
       if (m.can_disable_thinking && eff.length && !eff.includes('off')) eff.push('off（可关）');
-      const effs = eff.length ? eff.map(e => '<span class="tag warn">' + esc(e) + '</span>').join(' ')
-        : '<span style="color:var(--ink-3);font-size:12.5px">' + (m.supports_reasoning ? '固定档 · 默认 ' + esc(m.default_effort || '?') : '不支持思考') + '</span>';
-      return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"><div class="nm">' + esc(m.id) + '</div><div class="id">' + esc(m.name || '') + '</div></td>' +
-        '<td class="num">' + (m.credits ? esc(m.credits) : '—') + '</td>' +
-        '<td>' + (m.default_effort ? '<span class="tag ok">' + esc(m.default_effort) + '</span>' : '<span style="color:var(--ink-3)">—</span>') + '</td>' +
-        '<td class="efs" style="white-space:normal">' + effs + '</td>' +
-        '<td class="num">' + (m.context_length ? Math.round(m.context_length / 1000) + 'K' : '—') + '</td>' +
-        '<td class="num">' + (m.max_output_tokens ? Math.round(m.max_output_tokens / 1000) + 'K' : '—') + '</td></tr>';
+      const effs = eff.length
+        ? eff.map(e => '<span class="tag warn">' + esc(e) + '</span>').join('')
+        : '<span class="hint">' + (m.supports_reasoning ? '固定档 · 默认 ' + esc(m.default_effort || '?') : '不支持思考') + '</span>';
+      return '<div class="row">' +
+        '<div class="h">' +
+          '<span class="nm">' + esc(m.id) + '</span>' +
+          '<span class="sp"></span>' +
+          (m.default_effort ? '<span class="tag ok">默认 ' + esc(m.default_effort) + '</span>' : '') +
+        '</div>' +
+        (m.name ? '<div class="sub">' + esc(m.name) + '</div>' : '') +
+        '<div class="kv">' +
+          '<span>积分倍率 <b>' + (m.credits ? esc(m.credits) : '—') + '</b></span>' +
+          '<span>上下文 <b>' + (m.context_length ? Math.round(m.context_length / 1000) + 'K' : '—') + '</b></span>' +
+          '<span>最大输出 <b>' + (m.max_output_tokens ? Math.round(m.max_output_tokens / 1000) + 'K' : '—') + '</b></span>' +
+        '</div>' +
+        '<div class="tags">' + effs + '</div>' +
+      '</div>';
     }).join('');
     $('mdNote').textContent = list.length + ' 个模型 · 已刷新降级缓存';
   } catch (e) {
-    tb.innerHTML = '<tr><td colspan="7"><div class="empty">' + esc(e.message) + '</div></td></tr>';
+    box.innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
   }
 }
 $('btnModels').onclick = loadModels;
@@ -351,28 +394,25 @@ $('btnLogPin').onclick = () => {
    - 只动 transform / opacity / 数字，不碰 width/height/top：不触发重排；
    - 只在首次绘制、切换口径、重新进入本页时播放：5s 的静默刷新只更新数值，
      否则画面每 5 秒抖一次，读表的人会被自己的面板烦到；
-   - prefers-reduced-motion 下直接落终态：CSS 里那条媒体查询只关得住 transition
-     与 animation，关不住这里的 rAF 补间，必须显式判一次。 */
+   - prefers-reduced-motion 下直接落终态。 */
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const easeOut = p => 1 - Math.pow(1 - p, 3);
 
 // FMT 数值格式化表：数字滚动与静态渲染共用同一套口径，避免两处写法漂移。
-// 只列统计页真正会滚动的几种量（耗时没有滚动展示位，故不收在这里）。
 const FMT = {
   tok: formatTokenCount,
   int: formatInt,
   rate: v => (Number(v) || 0).toFixed(1) + ' tok/s',
 };
 
-// formatInt 千分位。请求次数动辄四位数，裸数字读不出量级；token 在"万"以下也复用它，
-// 免得同一行里出现 "5,948 次" 与 "5948" 两种写法。
+// formatInt 千分位。请求次数动辄四位数，裸数字读不出量级；token 在"万"以下也复用它。
 function formatInt(n) {
   n = Math.round(Number(n) || 0);
   return n >= 1000 ? n.toLocaleString('en-US') : String(n);
 }
 
 // tween 进度补间：fn 收缓动后的 0..1。起点恒为 0 而不读元素当前值——
-// 重复触发时起点不会漂移（"从当前值开始"会让连点后的动画越缩越短）。
+// 重复触发时起点不会漂移。
 function tween(dur, fn, done) {
   if (reduceMotion.matches) { fn(1); if (done) done(); return; }
   const t0 = performance.now();
@@ -420,8 +460,7 @@ function setNum(el, value, fmt) {
 }
 
 // syncRangeChips 口径按钮的选中态以 statsRng 为唯一来源。HTML 里预置的 .on 只是
-// 无 JS 时的兜底外观——两处各写一份默认值迟早会漂移（改了 JS 默认值却忘了改 HTML，
-// 页面就会出现"高亮着 30 天、数据却是今日"的错位）。
+// 无 JS 时的兜底外观——两处各写一份默认值迟早会漂移。
 function syncRangeChips() {
   document.querySelectorAll('#rngChips .chip').forEach(c => c.classList.toggle('on', c.dataset.rng === statsRng));
 }
@@ -451,8 +490,7 @@ async function loadStats(quiet) {
 }
 
 // lifetimeFootnote 头条脚注：说清"这个数是哪段时间的"，并把池的历史总账作为
-// 参照附上。两个口径的差别（有无按日明细）必须写在脸上——此前只标了口径名，
-// 用户第一眼仍读成"顶部有数、下面全空 = 页面坏了"。
+// 参照附上。两个口径的差别（有无按日明细）必须写在脸上。
 function lifetimeFootnote(ss, pt) {
   const hist = pt.total_tokens > 0
     ? '；账号历史总账 ' + formatTokenCount(pt.total_tokens) + '（统计启用前，无按日明细）'
@@ -485,7 +523,7 @@ function statsUnavailable(msg) {
   $('rngNote').textContent = '';
   $('mdStatNote').textContent = '';
   $('acStatNote').textContent = '';
-  const row = '<tr><td colspan="6"><div class="empty"><div class="big">统计不可用</div>' + esc(msg) + '</div></td></tr>';
+  const row = '<div class="empty"><div class="big">统计不可用</div>' + esc(msg) + '</div>';
   $('mdStatBody').innerHTML = row;
   $('acStatBody').innerHTML = row;
 }
@@ -495,8 +533,7 @@ function renderStats(d, animate) {
 
   /* 累计头条：口径是"自统计启用起"，与下方时间序列同一个聚合器——头条与区间因此
      永远自洽，不会出现"上面有数、下面全空"的观感。
-     池的历史总账（含统计功能上线之前的部分）降级进脚注：它只有总数、没有按日明细，
-     摆成头条只会让人以为页面自相矛盾。 */
+     池的历史总账（含统计功能上线之前的部分）降级进脚注：它只有总数、没有按日明细。 */
   setNum($('ltTotal'), ss.total_tokens, 'tok');
   setNum($('ltPrompt'), ss.prompt_tokens, 'tok');
   setNum($('ltCompletion'), ss.completion_tokens, 'tok');
@@ -519,9 +556,7 @@ function renderStats(d, animate) {
     ? '失败 · 成功率 ' + (t.success_rate * 100).toFixed(1) + '%'
     : '失败';
 
-  /* 口径说明：统计文件实际覆盖到哪一段，说清楚而不是让用户猜"为什么只有两天数据"。
-     覆盖度按"天"计（Days/Covered 都是日粒度）——写"小时"会让今日视图读成
-     "覆盖 1 / 1 小时"，那是柱子的粒度，不是覆盖范围。 */
+  /* 口径说明：统计文件实际覆盖到哪一段，说清楚而不是让用户猜"为什么只有两天数据"。 */
   const notes = [];
   if (d.first_day) notes.push('统计自 ' + mdOf(d.first_day) + ' 起');
   notes.push('覆盖 ' + (d.covered_days || 0) + ' / ' + (d.days || 0) + ' 天');
@@ -529,7 +564,7 @@ function renderStats(d, animate) {
   $('rngNote').textContent = notes.join(' · ');
 
   renderChart(d, animate);
-  renderStatTables(d);
+  renderStatRows(d);
   $('chartUnit').textContent = (d.unit === 'hour' ? '按小时（CST）' : '按自然日（CST）')
     + (chartPeak ? ' · 峰值 ' + formatTokenCount(chartPeak.tokens) + ' @ ' + chartPeak.label : '');
 
@@ -537,7 +572,6 @@ function renderStats(d, animate) {
 }
 
 // chartPeak 当前图上的峰值点（给整张图一个量级参照，无刻度的柱图读不出大小）。
-// 状态本身声明在文件顶部的状态区，这里只消费。
 function renderChart(d, animate) {
   const pts = d.series || [];
   const plot = $('chartPlot'), strip = $('chartStrip'), scale = $('chartScale');
@@ -587,9 +621,7 @@ function renderChart(d, animate) {
   const fills = plot.querySelectorAll('.fill');
   if (animate) fills.forEach(f => f.style.transform = 'scaleY(0)');
 
-  // 空序列（range=all 且统计文件里还没有任何一天）与"整区间零请求"（刚上线、还没流量）
-  // 都要显式写空态：前者 selectPoint 会提前返回留下上一轮读数，后者会显示某一天的
-  // "无请求"——都没回答"这一页为什么是空的"。
+  // 空序列与"整区间零请求"都要显式写空态。
   const hasAny = pts.some(p => (p.requests || 0) > 0);
   if (!pts.length) $('chartReadout').textContent = '统计区间内还没有记录';
   else if (!hasAny) $('chartReadout').textContent = '区间内还没有请求记录（网关首次转发后开始累积）';
@@ -623,11 +655,18 @@ function selectPoint(i) {
   if (!chartPts.length) return;
   $('chartReadout').innerHTML = pointReadout(statsData, i >= 0 ? i : Math.max(0, chartPeakIdx));
 }
-$('chartPlot').addEventListener('mouseover', ev => {
+// 图表点选：pointer 事件同时覆盖鼠标与触屏（手机上手指按下即读数，
+// 不需要先"悬停"再点——触屏没有悬停态）。pointerdown 直接给读数，
+// 手指在柱间滑动时也会连续更新（按下即捕获该元素）。
+$('chartPlot').addEventListener('pointerdown', ev => {
   const c = ev.target.closest('.col');
   if (c) selectPoint(Number(c.dataset.i));
 });
-$('chartPlot').addEventListener('mouseleave', () => selectPoint(-1));
+$('chartPlot').addEventListener('pointerover', ev => {
+  const c = ev.target.closest('.col');
+  if (c && !matchMedia('(pointer: coarse)').matches) selectPoint(Number(c.dataset.i));
+});
+$('chartPlot').addEventListener('pointerleave', () => selectPoint(-1));
 $('chartPlot').addEventListener('focusin', ev => {
   const c = ev.target.closest('.col');
   if (c) selectPoint(Number(c.dataset.i));
@@ -642,8 +681,8 @@ function paintStatFinals() {
   }
 }
 
-// statNumEls 统计页上参与"滚动"的数字（观测条 + 累计头条），其余表格数字不参与
-// 动效——表格每 5 秒重绘一次，跟着跳数字会让人没法读。
+// statNumEls 统计页上参与"滚动"的数字（观测条 + 累计头条），其余不参与动效
+// ——表格每 5 秒重绘一次，跟着跳数字会让人没法读。
 function statNumEls() {
   return [...$('view-stats').querySelectorAll('.stat .v')]
     .concat([$('ltTotal'), $('ltPrompt'), $('ltCompletion'), $('ltRequests'), $('ltAccounts')]);
@@ -676,43 +715,46 @@ function playStatsIntro() {
   ]);
 
   // 兜底落终态：rAF 在后台标签页与被截图的浏览器里会被暂停，补间可能永久停在中间值上，
-  // 页面就会显示"错的数字"（889.2m 而真值是 1.1b）——统计页宁可不动效也不能停错数。
-  // 目标值取自 dataset（每轮渲染都会刷新），故晚到的兜底写入不会写回过期数据。
+  // 页面就会显示"错的数字"。目标值取自 dataset（每轮渲染都会刷新），故晚到的兜底不会写回过期数据。
   setTimeout(() => { if (token === statsIntroToken) paintStatFinals(); }, 1600);
 }
 
-// renderStatTables 模型分布与账号用量两张排行表（同一套 .acc 表格语言，
-// 占比列复用账号表的抖动量条）。
-// token 字段一律走 `|| 0`：聚合桶的 json tag 带 omitempty（落盘体积所必需），
-// 零值字段在报文里是缺键而不是 0，直接交给 formatTokenCount 会渲染成 "—"。
-function renderStatTables(d) {
+// renderStatRows 模型分布与账号用量两排行（手机上是纵向行卡，桌面并排两栏）。
+// token 字段一律走 `|| 0`：聚合桶的 json tag 带 omitempty，零值字段在报文里是缺键。
+function renderStatRows(d) {
   const models = d.by_model || [];
   const accounts = d.by_account || [];
   $('mdStatBody').innerHTML = models.length ? models.map(m => {
     const pct = Math.round((m.share || 0) * 1000) / 10;
-    return '<tr><td class="mark" aria-hidden="true"></td>' +
-      '<td class="who"><div class="nm">' + esc(m.key) + '</div></td>' +
-      '<td class="num">' + formatTokenCount(m.total_tokens || 0) + '</td>' +
-      '<td class="cred" title="占区间总量 ' + pct + '%"><div class="n">' + pct + '%</div>' +
-      '<div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
-      '<td class="num">' + formatInt(m.requests) + '</td>' +
-      '<td class="num" style="color:var(--ink-3)">' + formatTokenCount(m.prompt_tokens || 0) + ' / ' + formatTokenCount(m.completion_tokens || 0) + '</td></tr>';
-  }).join('') : '<tr><td colspan="6"><div class="empty">区间内没有调用记录</div></td></tr>';
+    return '<div class="row">' +
+      '<div class="h"><span class="nm">' + esc(m.key) + '</span><span class="sp"></span>' +
+        '<span class="num" style="color:var(--ink-3)">' + formatInt(m.requests) + ' 次</span></div>' +
+      '<div class="kv">' +
+        '<span>TOKEN <b>' + formatTokenCount(m.total_tokens || 0) + '</b></span>' +
+        '<span>占比 <b>' + pct + '%</b></span>' +
+        '<span>输入 / 输出 <b>' + formatTokenCount(m.prompt_tokens || 0) + ' / ' + formatTokenCount(m.completion_tokens || 0) + '</b></span>' +
+      '</div>' +
+      '<div class="bar" title="占区间总量 ' + pct + '%"><i style="width:' + pct + '%"></i></div>' +
+    '</div>';
+  }).join('') : '<div class="empty">区间内没有调用记录</div>';
   $('mdStatNote').textContent = models.length ? models.length + ' 个模型' : '';
 
   $('acStatBody').innerHTML = accounts.length ? accounts.map(a => {
     const pct = Math.round((a.share || 0) * 1000) / 10;
     const name = a.label ? esc(a.label) : '<span style="color:var(--ink-3)">未命名</span>';
-    const short = a.key.length > 16 ? a.key.slice(0, 16) + '…' : a.key;
-    return '<tr><td class="mark" aria-hidden="true"></td>' +
-      '<td class="who" title="uid: ' + esc(a.key) + '"><div class="nm">' + name + '</div>' +
-      '<div class="id">' + esc(short) + '</div></td>' +
-      '<td class="num">' + formatTokenCount(a.total_tokens || 0) + '</td>' +
-      '<td class="cred" title="占区间总量 ' + pct + '%"><div class="n">' + pct + '%</div>' +
-      '<div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
-      '<td class="num">' + formatInt(a.requests) + '</td>' +
-      '<td class="num" style="color:' + (a.failed ? 'var(--bad)' : 'var(--ink-3)') + '">' + formatInt(a.failed) + '</td></tr>';
-  }).join('') : '<tr><td colspan="6"><div class="empty">区间内没有调用记录</div></td></tr>';
+    const short = a.key.length > 20 ? a.key.slice(0, 20) + '…' : a.key;
+    return '<div class="row">' +
+      '<div class="h"><span class="nm">' + name + '</span><span class="sp"></span>' +
+        '<span class="num" style="color:' + (a.failed ? 'var(--bad)' : 'var(--ink-3)') + '">失败 ' + formatInt(a.failed) + '</span></div>' +
+      '<div class="sub" title="uid: ' + esc(a.key) + '">' + esc(short) + '</div>' +
+      '<div class="kv">' +
+        '<span>TOKEN <b>' + formatTokenCount(a.total_tokens || 0) + '</b></span>' +
+        '<span>占比 <b>' + pct + '%</b></span>' +
+        '<span>请求 <b>' + formatInt(a.requests) + '</b></span>' +
+      '</div>' +
+      '<div class="bar" title="占区间总量 ' + pct + '%"><i style="width:' + pct + '%"></i></div>' +
+    '</div>';
+  }).join('') : '<div class="empty">区间内没有调用记录</div>';
   $('acStatNote').textContent = accounts.length ? accounts.length + ' 个账号' : '';
 }
 
@@ -860,16 +902,32 @@ $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textCo
   .then(() => toast('链接已复制', 'ok'), () => toast('复制失败，请手动选择复制', 'err'));
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
+// 复制访问地址：API 地址给客户端用，面板地址给自己/同事在浏览器里打开。
+// 两者用途不同，都放在这一次点击里说明白，避免复制错的那个去配客户端。
+$('btnShare').onclick = async () => {
+  if (!panelURL) return;
+  const apiURL = panelURL.replace(/\/$/, '') + '/v1';
+  const text = panelURL + '\n（OpenAI 接口地址：' + apiURL + '）';
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('已复制面板地址：' + panelURL, 'ok');
+  } catch (e) {
+    // 非 HTTPS 或旧浏览器下 clipboard API 不可用（局域网恰好都是 http）——
+    // 退回手动选择，至少让用户能看到地址。
+    prompt('复制以下地址到其它设备的浏览器打开：', panelURL);
+  }
+};
+
 $('btnAdd').onclick = openAdd;
 $('btnRefresh').onclick = async () => {
   const b = $('btnRefresh');
-  b.disabled = true; b.textContent = '刷新中…';
+  b.disabled = true;
   try {
     await api('balance_all', { method: 'POST' });
     await loadOverview(true);
     toast('余额已从上游刷新', 'ok');
   } catch (e) { toast('刷新失败：' + e.message, 'err'); await loadOverview(true); }
-  finally { b.disabled = false; b.textContent = '刷新'; }
+  finally { b.disabled = false; }
   if (view === 'logs') loadLogs();
 };
 
@@ -896,7 +954,6 @@ start();
 let taskUID = null;
 
 // 可自动完成的任务（与后端 autoActions 表一致）：判据为行为事件、可经网关复现。
-// 其余任务需在官方客户端内交互，面板只展示指引（行 title 提示）。
 // 注意：键含点号（Model_chat_GLM5.2）必须加引号，否则会被解析成属性访问 + 数字字面量。
 const AUTO_TASKS = {
   'chat_5': '上报 5 条对话活跃事件（自动补足差额）',
@@ -960,7 +1017,7 @@ $('btnTaskAutoAll').onclick = async () => {
     toast(`执行完成：成功 ${okN} 项，跳过 ${skipN} 项${errN ? '，失败 ' + errN + ' 项' : ''}`, errN ? 'err' : 'ok');
     console.log('auto_all results:', r.results);
   } catch (e) { toast(e.message, 'err'); }
-  finally { btn.disabled = false; btn.textContent = '一键完成可自动任务'; loadTasks(); }
+  finally { btn.disabled = false; btn.textContent = '一键完成'; loadTasks(); }
 };
 
 async function loadTasks() {
@@ -1000,13 +1057,15 @@ async function loadTasks() {
         : t.accept_status === 'accepted' ? ''
         : '<button class="xs" data-t="accept" data-c="' + esc(t.task_code) + '">接受</button>';
       // 操作指引（description/task_desc）挂 title 提示：如何完成交给用户看
-      const tip = [t.title, t.task_desc || t.description, t.jump_url ? '跳转：' + t.jump_url : ''].filter(Boolean).join('\n');
-      return '<tr title="' + esc(tip) + '"><td class="mark" aria-hidden="true"><i></i></td>' +
-        '<td class="who"><div class="nm">' + esc(t.title || t.task_code) + '</div><div class="id">' + esc(t.task_code) + (t.tag ? ' · ' + esc(t.tag) : '') + '</div></td>' +
-        '<td class="num">' + esc(prog) + '</td>' +
-        '<td class="num">' + esc(reward) + '</td>' +
-        '<td>' + badge + '</td>' +
-        '<td class="acts">' + acted + '</td></tr>';
+      const tip = [t.task_desc || t.description, t.jump_url ? '跳转：' + t.jump_url : ''].filter(Boolean).join('\n');
+      return '<div class="row">' +
+        '<div class="h"><span class="nm">' + esc(t.title || t.task_code) + '</span>' +
+          (t.tag ? '<span class="tag mute">' + esc(t.tag) + '</span>' : '') +
+          '<span class="sp"></span>' + badge + '</div>' +
+        '<div class="sub" title="' + esc(tip) + '">' + esc(t.task_code) + '</div>' +
+        '<div class="kv"><span>进度 <b>' + esc(prog) + '</b></span><span>奖励 <b>' + esc(reward) + '</b></span></div>' +
+        (acted ? '<div class="acts" style="display:flex;gap:6px;margin-top:9px">' + acted + '</div>' : '') +
+      '</div>';
     }).join('');
     st.hidden = true;
     tb.hidden = false;
@@ -1151,7 +1210,7 @@ $('btnRunQueue').onclick = async () => {
     toast('队列已启动：' + r.total + ' 项（并发 ' + conc + '）', 'ok');
     startQueuePolling();
   } catch (e) { toast(e.message, 'err'); }
-  finally { b.disabled = false; b.textContent = '执行全部待办'; }
+  finally { b.disabled = false; b.textContent = '执行全部'; }
 };
 // 扫描结果 → 分组条目（无执行状态）
 function groupItems(d) {

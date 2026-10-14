@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 取自面板 CSS 变量，保持与 Web 界面同一套配色。 -->
+    <color name="bg">#FF0B0E14</color>
+    <color name="surface">#FF11161F</color>
+    <color name="surface_2">#FF171D28</color>
+    <color name="ink">#FFDCE7F2</color>
+    <color name="ink_2">#FF94A5BA</color>
+    <color name="ink_3">#FF61738A</color>
+    <color name="accent">#FF2AD4E8</color>
+    <color name="ok">#FF46D67F</color>
+</resources>
