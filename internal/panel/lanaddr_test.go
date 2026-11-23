@@ -55,20 +55,16 @@ func TestRootRedirectsToPanel(t *testing.T) {
 	}
 }
 
-// 面板页面必须含手机适配的关键声明：viewport 与底部安全区。
-// 这两条丢了在手机浏览器上会退化成"能滚动但点不中"的桌面版。
+// 面板页面必须含基础 viewport 声明，否则手机浏览器退化为桌面缩放版。
+// 注：面板 UI 已回退为 1413201 的桌面版（用户选择）；手机优先版
+// （viewport-fit=cover / safe-area-inset）随 b6ca9fb 一同退场，
+// 故此处只校验基础 viewport，不再断言刘海屏安全区声明。
 func TestPanelMobileViewport(t *testing.T) {
 	p := newTestPanel()
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
 	body := rec.Body.String()
-	for _, must := range []string{
-		`name="viewport"`,
-		`viewport-fit=cover`, // 让开刘海/手势条
-		`env(safe-area-inset-bottom`, // 底部导航不压住系统手势条
-	} {
-		if !strings.Contains(body, must) {
-			t.Errorf("index.html 缺少手机适配声明 %q", must)
-		}
+	if !strings.Contains(body, `name="viewport"`) {
+		t.Errorf("index.html 缺少基础 viewport 声明")
 	}
 }

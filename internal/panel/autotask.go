@@ -219,8 +219,17 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 	}
 	act := autoActionFor(body.TaskCode)
 	if act == nil {
-		writeErr(w, http.StatusNotImplemented,
-			"该任务需要客户端内交互（无对应接口），无法自动完成；请按任务说明在官方客户端操作")
+		// 无自动动作：给出该任务的具体人工路径，而不是一句笼统的「需客户端交互」。
+		// 上游会下发我们没有动作的任务（如 wb_wechat_oa_subscribe_task），
+		// 说清楚要做什么，用户才知道该点哪里。
+		hint := "该任务需要客户端内交互（无对应接口），无法自动完成；请按任务说明在官方客户端操作"
+		if t, terr := p.taskByCode(a, body.TaskCode); terr == nil && t != nil {
+			hint = manualHint(*t)
+			if left := t.ExpiresIn(time.Now()); left > 0 && left < 7*24*time.Hour {
+				hint += fmt.Sprintf("（还剩 %d 天到期）", int(left.Hours()/24))
+			}
+		}
+		writeErr(w, http.StatusNotImplemented, hint)
 		return
 	}
 	// per-account 互斥：同账号的任务动作正在跑（单任务或全量）时直接 409，
@@ -729,9 +738,28 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 			out = append(out, item)
 			continue
 		}
-		if before.Claimed || before.Current >= before.Target && before.Target > 0 {
+		// 已达标未领：先补领再跳过（而不是直接 continue）。
+		// 旧实现把这类任务当成「已完成」跳过，导致进度满了但奖励一直不领——
+		// 这正是新号积分卡在某个值上不动的成因之一。
+		if before.Claimed || (before.Current >= before.Target && before.Target > 0) {
 			item["status"] = "skipped"
 			item["message"] = "已完成（" + taskProgressText(before) + "）"
+			if !before.Claimed && before.Claimable {
+				if credit, energy, cerr := p.cfg.Upstream.ClaimReward(a, act.TaskCode); cerr == nil {
+					item["claimable"] = true
+					item["claimed"] = true
+					item["credit"] = credit
+					item["energy"] = energy
+					if credit > 0 || energy > 0 {
+						item["message"] = "达标未领，已补领 +" + fmt.Sprint(credit) + " 分 +" + fmt.Sprint(energy) + " 能"
+					} else {
+						item["message"] = "奖励此前已领取"
+					}
+				} else {
+					item["claim_error"] = cerr.Error()
+					item["message"] = "达标未领，补领失败（可在列表手动重试）"
+				}
+			}
 			out = append(out, item)
 			continue
 		}

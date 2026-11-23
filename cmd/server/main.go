@@ -32,7 +32,15 @@ import (
 
 // appVersion 网关版本，透出到 /panel/api/overview。
 // 1.0.0 起为 workbuddy-free 新身份起点（此前的 1.8.1-panel 属 fork 血缘，不再沿用）。
-const appVersion = "1.0.0"
+//
+// 版本号规则：改动一旦影响面板可见行为就 bump，否则排查问题时「v1.0.0」无法
+// 区分是哪一版——上游曾因版本号长期不动在排查远程实例时被误导。
+//
+//	1.0.0  新身份起点
+//	1.1.0  任务板块按服务端下发分类（可自动/待领奖/需人工/已过期）；
+//	       补齐 valid_end 等 6 个上游字段；成长任务队列与开学季按 in_period 过滤；
+//	       网关 401 兜底刷新（签到/余额/chat 原地重试）。
+const appVersion = "1.1.0"
 
 func main() {
 	cfgPath := flag.String("config", "config.json", "配置文件路径（默认当前目录 config.json；不存在时自动生成推荐配置）")

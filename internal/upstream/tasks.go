@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
@@ -48,6 +49,50 @@ type Task struct {
 	Status       string `json:"status,omitempty"`    // 上游任务状态（complete 等）
 	Claimable    bool   `json:"claimable,omitempty"` // 进度达标且未领取（本地推算）
 	Claimed      bool   `json:"claimed,omitempty"`   // 已领取（accept_status == claimed）
+
+	// 有效期字段（服务端实测下发，此前未解析）。上游对**已过期**任务仍会下发，
+	// accept_status 停在 accepted、progress 停在 0/N——不区分的话它会永远显示为
+	// 「待办」，把真正能做的任务挤掉。
+	// 实测样例（wb_wechat_oa_subscribe_task）：valid_end=2026-11-30T23:59:00+08:00。
+	ValidStart    string `json:"valid_start,omitempty"` // 任务开始时间（RFC3339），空=不限
+	ValidEnd      string `json:"valid_end,omitempty"`   // 任务到期时间（RFC3339），空=永久
+	IsNew         bool   `json:"is_new,omitempty"`      // 服务端标记的新任务（仅展示用）
+	IsPinned      bool   `json:"is_pinned,omitempty"`   // 置顶（仅展示用）
+	BadgeName     string `json:"badge_name,omitempty"`  // 徽标文案（仅展示用）
+	TemplateIDFix int64  `json:"template_id_fixed,omitempty"` // 模板类任务的固定模板 id
+}
+
+// Expired 任务是否已过有效期（valid_end 早于 now）。
+//
+// 语义边界：
+//   - valid_end 为空 = 永久任务，恒未过期；
+//   - 解析失败按「未过期」处理——宁可多展示一项，也不要把一个其实能做的
+//     任务静默藏掉（上游时间格式变过一次，不能让它变成功能的单点故障）。
+func (t Task) Expired(now time.Time) bool {
+	if t.ValidEnd == "" {
+		return false
+	}
+	end, err := time.Parse(time.RFC3339, t.ValidEnd)
+	if err != nil {
+		return false
+	}
+	return now.After(end)
+}
+
+// ExpiresIn 距离到期还有多久（valid_end 为空或已过期返回 0）。供面板展示倒计时。
+func (t Task) ExpiresIn(now time.Time) time.Duration {
+	if t.ValidEnd == "" {
+		return 0
+	}
+	end, err := time.Parse(time.RFC3339, t.ValidEnd)
+	if err != nil {
+		return 0
+	}
+	d := end.Sub(now)
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 // ListTasks 拉取全量任务列表。
@@ -77,6 +122,12 @@ func (c *Client) ListTasks(a *auth.Auth) ([]Task, error) {
 			Target       int64           `json:"target"`
 			Current      int64           `json:"current"`
 			Progress     json.RawMessage `json:"progress"`
+			ValidStart   string          `json:"valid_start"`
+			ValidEnd     string          `json:"valid_end"`
+			IsNew        bool            `json:"is_new"`
+			IsPinned     bool            `json:"is_pinned"`
+			BadgeName    string          `json:"badge_name"`
+			TemplateID   int64           `json:"template_id_fixed"`
 		} `json:"tasks"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
@@ -115,6 +166,13 @@ func (c *Client) ListTasks(a *auth.Auth) ([]Task, error) {
 			Status:       t.Status,
 			Claimable:    !claimed && tgt > 0 && cur >= tgt,
 			Claimed:      claimed,
+
+			ValidStart:    t.ValidStart,
+			ValidEnd:      t.ValidEnd,
+			IsNew:         t.IsNew,
+			IsPinned:      t.IsPinned,
+			BadgeName:     t.BadgeName,
+			TemplateIDFix: t.TemplateID,
 		})
 	}
 	return out, nil
