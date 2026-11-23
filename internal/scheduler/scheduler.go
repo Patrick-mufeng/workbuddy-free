@@ -272,7 +272,14 @@ func (s *Scheduler) RunCheckinNow() {
 		if a.IsGlobal() {
 			continue
 		}
-		if err := s.cfg.Upstream.DailyCheckin(a); err != nil {
+		err := s.cfg.Upstream.DailyCheckin(a)
+		// 网关层 401（HTML 错误页）：accessToken 已被服务端吊销/在别处轮换，但本地
+		// expiresAt 仍远未到（NeedsRefresh 不会触发）。强制刷新一次，成功则复签——
+		// 覆盖「双跑互顶后本进程 token 落后但 refreshToken 轮换前还可用」的窗口。
+		if upstream.IsGatewayUnauthorized(err) && s.revalidateOn401(a) == nil {
+			err = s.cfg.Upstream.DailyCheckin(a)
+		}
+		if err != nil {
 			// "今天已签到"是幂等成功（上游对重复签到返回 code!=0），不再当失败打 error 行。
 			if upstream.IsAlreadyCheckin(err) {
 				log.Printf("checkin %s: 今天已签到（幂等）", st.UID)
@@ -379,6 +386,30 @@ func (s *Scheduler) RunKeepaliveNow() {
 	}
 }
 
+// revalidateOn401 网关 401 后的兜底刷新：accessToken 疑似被服务端吊销/在别处被
+// 轮换（本地 expiresAt 仍远未到，按过期时间的 NeedsRefresh 不会触发）。强制
+// RefreshToken 一次：
+//   - 成功 → 清 12153 计数 + 落盘，返回 nil（调用方用新 token 重试原请求一次）；
+//   - 失败且 12153 → NoteSessionDead 连续计数（达到阈值禁用，与 keepalive 同口径；
+//     余额刷新每 5 分钟一跳，死号约 15 分钟内收敛禁用，不再每天刷 401）；
+//   - 其他失败（网络抖动等）→ 原样返回，不计数（与 keepalive 的误判防护一致）。
+func (s *Scheduler) revalidateOn401(a *auth.Auth) error {
+	if err := s.cfg.Upstream.RefreshToken(a); err != nil {
+		var ue *upstream.Error
+		if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
+			if s.cfg.Pool.NoteSessionDead(a.UID) {
+				log.Printf("revalidate %s: 连续 %d 次 12153 session dead — 禁用", a.UID, pool.SessionDeadThreshold())
+			}
+		}
+		return err
+	}
+	s.cfg.Pool.ClearSessionDead(a.UID)
+	if err := a.SaveAtomic(); err != nil {
+		log.Printf("revalidate %s save: %v", a.UID, err)
+	}
+	return nil
+}
+
 // RunBalanceRefreshNow 并发对所有非禁用账号查询余额并更新池内 credits。
 // 解冻语义与签到一致（ReenableIfCredits：余额 > 0 的冷却账号自动解冻），
 // 但不做签到、不刷新 token——只让"积分"这个观测量保持新鲜。
@@ -397,6 +428,11 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 		go func(a *auth.Auth, uid string) {
 			defer wg.Done()
 			remain, total, expiring, err := s.cfg.Upstream.UserResourceDetailed(a, s.cfg.ExpiringSoonWindow)
+			// 网关层 401 兜底：强制刷新一次再用新 token 重查（签到路径同款，见 revalidateOn401）。
+			// 死号经此累计 12153 计数，3 跳（约 15 分钟）后自动禁用，余额刷新随之跳过。
+			if upstream.IsGatewayUnauthorized(err) && s.revalidateOn401(a) == nil {
+				remain, total, expiring, err = s.cfg.Upstream.UserResourceDetailed(a, s.cfg.ExpiringSoonWindow)
+			}
 			if err != nil {
 				log.Printf("balance %s: %v", uid, err)
 				return

@@ -1192,6 +1192,17 @@ func IsAlreadyCheckin(err error) bool {
 	return false
 }
 
+// IsGatewayUnauthorized 报告 err 是否为「网关层 401 且无业务语义」：上游 APISIX/
+// openresty 直接以 HTML 错误页拒绝 accessToken（body 无 12153 等 marker，Classify
+// 只能归 ErrClient）。语义是 accessToken 已在服务端失效（吊销/在别处被轮换），但
+// **refreshToken 未必死**——与业务层 401（JSON 12153，session 确死）不同，值得
+// 强制刷新一次再用新 token 重试；refresh 也 12153 才算 session 死。
+// 调用方（scheduler/handler）据此走 revalidate 兜底，见 scheduler.revalidateOn401。
+func IsGatewayUnauthorized(err error) bool {
+	var ue *Error
+	return errors.As(err, &ue) && ue.Status == http.StatusUnauthorized && ue.Kind == ErrClient
+}
+
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) > n {

@@ -1563,3 +1563,113 @@ func TestCustomModeFingerprintSanitizePreserved(t *testing.T) {
 		t.Errorf("want exactly 1 system message, got %d (all=%v)", systemCount, msgs)
 	}
 }
+
+// chatGateway401HTML 复刻上游网关（APISIX/openresty）401 错误页：纯 HTML、无 12153
+// marker，Classify 归 ErrClient —— 与生产 chat_stream 401 日志同形。
+const chatGateway401HTML = `<html>
+<head><title>401 Authorization Required</title></head>
+<body>
+<center><h1>401 Authorization Required</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>`
+
+// TestChatGateway401RefreshRetriesInPlace 网关层 HTML 401（accessToken 被服务端吊销/
+// 在别处轮换，expiresAt 仍远未到）→ 强制刷新成功 → 新 token 原地重试本请求成功。
+// 单号池自愈：不依赖轮转（MaxRotate 耗尽也无妨），账号不受罚（token 落后非账号过错）。
+func TestChatGateway401RefreshRetriesInPlace(t *testing.T) {
+	var chatCalls, refreshCalls int
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/token/refresh") {
+				refreshCalls++
+				return &http.Response{
+					StatusCode: 200,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"code":0,"data":{"accessToken":"fresh","expiresIn":2592000}}`)),
+				}, nil
+			}
+			chatCalls++
+			if r.Header.Get("Authorization") == "Bearer fresh" {
+				return &http.Response{
+					StatusCode: 200,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:       io.NopCloser(strings.NewReader(sseOK)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: 401,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body:       io.NopCloser(strings.NewReader(chatGateway401HTML)),
+			}, nil
+		})},
+		ChatBaseCN:    "https://fake.example",
+		BillingBaseCN: "https://fake.example",
+	}
+	// ExpiresAt 远未到：确认兜底刷新不依赖按过期时间的 NeedsRefresh 门控。
+	a := &auth.Auth{UID: "u1", AccessToken: "stale", RefreshToken: "rt", ExpiresAt: 9999999999}
+	p := testPoolWith(a)
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s（刷新后原地重试应成功）", rec.Code, rec.Body)
+	}
+	if chatCalls != 2 {
+		t.Errorf("chat calls=%d want 2（旧 token 401 + 新 token 重试）", chatCalls)
+	}
+	if refreshCalls != 1 {
+		t.Errorf("refresh calls=%d want 1", refreshCalls)
+	}
+	if a.AccessToken != "fresh" {
+		t.Errorf("token not refreshed: %s", a.AccessToken)
+	}
+	st, _ := p.Status("u1")
+	if st.Disabled || st.Cooling || st.ErrTotal != 0 {
+		t.Errorf("token 落后非账号过错，不应受罚: %+v", st)
+	}
+}
+
+// TestChatGateway401SessionDeadCounts 网关 401 且兜底刷新也 12153 → NoteSessionDead
+// 连续计数（3 次禁用，与 keepalive/签到同口径）。此前该形态 ErrClient「只换号不罚」，
+// 死号赖池反复送死；现在 chat 侧也能推进死号收敛。
+func TestChatGateway401SessionDeadCounts(t *testing.T) {
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(r.URL.Path, "/token/refresh") {
+				return &http.Response{
+					StatusCode: 401,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"code":12153,"msg":"Offline user session not found"}`)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: 401,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body:       io.NopCloser(strings.NewReader(chatGateway401HTML)),
+			}, nil
+		})},
+		ChatBaseCN:    "https://fake.example",
+		BillingBaseCN: "https://fake.example",
+	}
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "stale", RefreshToken: "rt", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	for i := 1; i <= 3; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+		if rec.Code != 503 {
+			t.Fatalf("round %d: code=%d want 503（单号池无可换号）", i, rec.Code)
+		}
+		st, _ := p.Status("u1")
+		if i < 3 && st.Disabled {
+			t.Fatalf("round %d: 第 %d 次 12153 不应禁用（误判防护）: %+v", i, i, st)
+		}
+	}
+	if st, _ := p.Status("u1"); !st.Disabled {
+		t.Fatalf("连续 3 次 12153 应禁用: %+v", st)
+	}
+	// ErrClient 语义不变：全程只换号不罚，errTotal 不得被喂。
+	if st, _ := p.Status("u1"); st.ErrTotal != 0 {
+		t.Errorf("ErrClient 不应喂熔断计数: %+v", st)
+	}
+}

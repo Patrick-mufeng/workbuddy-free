@@ -497,6 +497,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		body = prompt.Rewrite(body, prompt.Degraded)
 		degradedApplied = true
 	}
+	// reauthTried 网关 401 兜底刷新已用标记（每请求一次）：accessToken 被服务端吊销/
+	// 在别处轮换时 expiresAt 仍远未到，NeedsRefresh 不触发；401 实测后才知 token 已死。
+	// 刷新成功 → 原地重试本请求（不占轮转排除表，单号池也能自愈）；刷新 12153 →
+	// 计入 NoteSessionDead 连续计数（与 keepalive/签到同口径）。见循环内 401 分支。
+	reauthTried := false
 
 	// outbound model 名重写为 bareModel（D6）：realm 前缀是网关侧路由协议，
 	// 上游不认前缀（global 账号也请求裸模型名）。裸名时 bareModel==peek.Model 恒等。
@@ -622,6 +627,33 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody)}
+			// 网关层 401（HTML 错误页、Classify 归 ErrClient）：accessToken 已被服务端
+			// 吊销/在别处轮换，但 refreshToken 未必死。强制刷新一次：
+			//   - 成功 → 落盘后原地重试本请求（退出排除表，下轮重新可选；单号池也能
+			//     自愈，不必把请求轮转死）；
+			//   - 失败且 12153 → NoteSessionDead 连续计数（3 次禁用，与 keepalive/签到
+			//     同口径；此前该形态只换号不罚，死号赖池反复送死）；
+			//   - 其他失败 → 维持 ErrClient「只换号不罚」现状（防雪崩语义不变）。
+			if status == http.StatusUnauthorized && kind == upstream.ErrClient && !reauthTried {
+				reauthTried = true
+				if rerr := h.cfg.Upstream.RefreshToken(acct); rerr == nil {
+					if serr := acct.SaveAtomic(); serr != nil {
+						log.Printf("chat reauth uid=%s: save auth failed: %v", acct.UID, serr)
+					}
+					h.cfg.Pool.ClearSessionDead(acct.UID)
+					delete(tried, acct.UID) // 原地重试：本账号退出轮转排除表
+					releaseHeld()
+					log.Printf("chat uid=%s: gateway 401 -> token refreshed, retry in place", acct.UID)
+					continue
+				} else {
+					var rerrUE *upstream.Error
+					if errors.As(rerr, &rerrUE) && rerrUE.Kind == upstream.ErrSessionDead {
+						if h.cfg.Pool.NoteSessionDead(acct.UID) {
+							log.Printf("chat uid=%s: 连续 %d 次 12153 session dead — 禁用", acct.UID, pool.SessionDeadThreshold())
+						}
+					}
+				}
+			}
 			h.applyErrorPolicy(acct.UID, kind, string(respBody), peek.Model)
 			fail(acct.UID)
 			continue

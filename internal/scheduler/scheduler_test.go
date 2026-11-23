@@ -406,3 +406,106 @@ func TestRunBalanceRefreshNowUpdatesCreditsAndRevives(t *testing.T) {
 		t.Errorf("u2 must stay disabled")
 	}
 }
+
+// gateway401HTML 复刻上游网关（APISIX/openresty）的 401 错误页：纯 HTML、无业务信封，
+// Classify 归 ErrClient —— 与生产「签到/余额 401」日志逐字同形。
+const gateway401HTML = `<html>
+<head><title>401 Authorization Required</title></head>
+<body>
+<center><h1>401 Authorization Required</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>`
+
+// TestRunCheckinGateway401RefreshesAndRetries 签到遇网关 401 → 强制刷新 token →
+// 新 token 复签成功。覆盖「accessToken 在别处被轮换但 refreshToken 尚有效」的自愈路径。
+func TestRunCheckinGateway401RefreshesAndRetries(t *testing.T) {
+	var checkinCalls, refreshCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/daily-checkin"):
+			checkinCalls.Add(1)
+			if r.Header.Get("Authorization") == "Bearer fresh" {
+				w.Write([]byte(`{"code":0,"msg":"ok","data":{}}`))
+				return
+			}
+			w.WriteHeader(401)
+			w.Write([]byte(gateway401HTML))
+		case strings.HasSuffix(r.URL.Path, "/get-user-resource"):
+			w.Write([]byte(`{"code":0,"data":{"Response":{"Data":{"Accounts":[{"CycleCapacitySize":100,"CycleCapacityRemain":50,"CycleCapacityUsed":0}]}}}}`))
+		case strings.HasSuffix(r.URL.Path, "/token/refresh"):
+			refreshCalls.Add(1)
+			w.Write([]byte(`{"code":0,"data":{"accessToken":"fresh","expiresIn":3600}}`))
+		default:
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	p := pool.New("")
+	// ExpiresAt 远未到：确认签到路径的兜底刷新不依赖按过期时间的 NeedsRefresh。
+	a := &auth.Auth{UID: "u1", AccessToken: "stale", RefreshToken: "rt", ExpiresAt: 9999999999}
+	p.Add(a)
+
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up})
+	s.RunCheckinNow()
+
+	if got := checkinCalls.Load(); got != 2 {
+		t.Errorf("checkin calls=%d want 2（旧 token 401 一次 + 新 token 复签一次）", got)
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Errorf("refresh calls=%d want 1", got)
+	}
+	if a.AccessToken != "fresh" {
+		t.Errorf("token not refreshed: %s", a.AccessToken)
+	}
+	if st, _ := p.Status("u1"); st.Disabled {
+		t.Errorf("自愈成功不应禁用: %+v", st)
+	}
+}
+
+// TestRunBalanceGateway401SessionDeadDisables 余额查询遇网关 401 → 兜底刷新也 12153 →
+// 连续计数达阈值（3）自动禁用；此后余额刷新跳过该号（不再每 5 分钟刷 401）。
+func TestRunBalanceGateway401SessionDeadDisables(t *testing.T) {
+	var refreshCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/get-user-resource"):
+			w.WriteHeader(401)
+			w.Write([]byte(gateway401HTML))
+		case strings.HasSuffix(r.URL.Path, "/token/refresh"):
+			refreshCalls.Add(1)
+			w.WriteHeader(401)
+			w.Write([]byte(`{"code":12153,"msg":"12153:refresh token failed:400 Bad Request: invalid_grant: Session doesn't have required client"}`))
+		default:
+			http.Error(w, "not found", 404)
+		}
+	}))
+	defer srv.Close()
+
+	p := pool.New("")
+	a := &auth.Auth{UID: "u1", AccessToken: "stale", RefreshToken: "rt", ExpiresAt: 9999999999}
+	p.Add(a)
+
+	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
+	s := New(Config{Pool: p, Upstream: up})
+	for i := 1; i <= 3; i++ {
+		s.RunBalanceRefreshNow()
+		st, _ := p.Status("u1")
+		if i < 3 && st.Disabled {
+			t.Fatalf("第 %d 次 12153 不应禁用（误判防护）: %+v", i, st)
+		}
+	}
+	if st, _ := p.Status("u1"); !st.Disabled {
+		t.Fatalf("连续 3 次 12153 应禁用: %+v", st)
+	}
+	if got := refreshCalls.Load(); got != 3 {
+		t.Errorf("refresh calls=%d want 3", got)
+	}
+	// 禁用后不再发起（第 4 轮余额刷新跳过死号，refresh 不再被调用）。
+	s.RunBalanceRefreshNow()
+	if got := refreshCalls.Load(); got != 3 {
+		t.Errorf("disabled account must be skipped, refresh calls=%d want 3", got)
+	}
+}
