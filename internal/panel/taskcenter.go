@@ -7,7 +7,6 @@
 //   - 执行队列（run_queue + queue）：把待办项按账号分组排队执行——账号内
 //     串行（复用 per-account 锁，与单任务/一键完成互斥），账号间并发
 //     （concurrency 信号量限制，默认 1）。队列状态可轮询。
-//   - 开学季（school/status + school/run_all）：独立状态视图 + 一键闭环。
 package panel
 
 import (
@@ -26,14 +25,6 @@ import (
 // ---------------------------------------------------------------------------
 // 扫描（只读）
 // ---------------------------------------------------------------------------
-
-// schoolTaskView 开学季任务条目（面板展示口径）。
-type schoolTaskView struct {
-	Code   string `json:"task_code"`
-	Status string `json:"status"` // pending | in_progress | completed | claimed
-	Prog   int    `json:"progress"`
-	Target int    `json:"target_count"`
-}
 
 // scanTaskView 扫描视图里的任务条目：upstream.Task + 一句「怎么做」的提示。
 //
@@ -55,17 +46,21 @@ type scanTaskView struct {
 //   - Expired   ：已过 valid_end，做了也不计分 → 只提示，不进队列。
 //
 // 旧实现把后两组直接丢弃，导致「以为没有待办，其实是不会做/已过期」。
+//
+// Level/LevelProg 是另一套「等级任务」（"养虾"系列，/activity/growth/tasks，
+// 无 /v2 前缀）。它没有 progress/reward 字段，status 恒为 available，
+// 因此只做只读展示，不参与四分类、也不进队列。
 type scanAccountItem struct {
-	UID       string           `json:"uid"`
-	Nickname  string           `json:"nickname"`
-	Growth    []scanTaskView   `json:"growth,omitempty"`
-	Claimable []scanTaskView   `json:"claimable,omitempty"`
-	Manual    []scanTaskView   `json:"manual,omitempty"`
-	Expired   []scanTaskView   `json:"expired,omitempty"`
-	GrowthErr string           `json:"growth_error,omitempty"`
-	School    []schoolTaskView `json:"school,omitempty"`
-	SchoolErr string           `json:"school_error,omitempty"`
-	InPeriod  bool             `json:"in_period"`
+	UID       string                 `json:"uid"`
+	Nickname  string                 `json:"nickname"`
+	Growth    []scanTaskView         `json:"growth,omitempty"`
+	Claimable []scanTaskView         `json:"claimable,omitempty"`
+	Manual    []scanTaskView         `json:"manual,omitempty"`
+	Expired   []scanTaskView         `json:"expired,omitempty"`
+	GrowthErr string                 `json:"growth_error,omitempty"`
+	Level     []upstream.LevelTask   `json:"level_tasks,omitempty"`
+	LevelProg *upstream.LevelProfile `json:"level_profile,omitempty"`
+	LevelErr  string                 `json:"level_error,omitempty"`
 }
 
 // taskCapability 任务的分组结果（见 scanAccountItem 注释）。
@@ -124,19 +119,7 @@ func manualHint(t upstream.Task) string {
 	return "无自动化动作，请在官方客户端按任务说明完成"
 }
 
-// schoolPending 开学季任务是否待办（排除学生认证）。
-func schoolPending(t upstream.SchoolTask) bool {
-	switch t.TaskCode {
-	case "task_student_verify":
-		return false // 需微信学生真实认证
-	case "desktop_chat_1_time":
-		return t.Status != "claimed"
-	default:
-		return t.Status != "claimed" && t.Status != "completed"
-	}
-}
-
-// tasksScanAll 扫描全部账号：成长任务（未完成+可自动化）+ 开学季（未完成）。
+// tasksScanAll 扫描全部账号：成长任务。
 // 只读操作，并发拉取（账号数个位数）。
 func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 	states := p.cfg.Pool.List()
@@ -155,7 +138,17 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 			}
 			it := &items[i]
 			it.UID, it.Nickname = uid, a.Nickname
-			// D4 门控：global 账号无 CN 成长/开学季任务体系，不发起任何上游调用。
+			// 等级任务（"养虾"系列）：两套 realm 都有（global 走 workbuddy.ai），
+			// 且与成长任务不互为超集，所以**不受下面 IsGlobal 门控影响**单独拉取。
+			if lv, err := p.cfg.Upstream.ListLevelTasks(a); err != nil {
+				it.LevelErr = err.Error()
+			} else {
+				it.Level = lv
+			}
+			if prog, err := p.cfg.Upstream.FetchLevelProfile(a); err == nil {
+				it.LevelProg = prog
+			}
+			// D4 门控：global 账号无 CN 成长任务体系，不发起成长任务的调用。
 			if a.IsGlobal() {
 				return
 			}
@@ -181,30 +174,12 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			if stasks, inPeriod, err := p.cfg.Upstream.SchoolTasks(a); err != nil {
-				it.SchoolErr = err.Error()
-			} else {
-				it.InPeriod = inPeriod
-				// 活动已结束（in_period=false）就不再把它的任务列为待办。
-				// 上游对结束的活动仍会返回全部任务（status 停在 pending），
-				// 不过滤的话它们会永远显示为「待执行」——实测 9 个账号共 36 项，
-				// 把真正能做的任务和高优先级提示全挤到下面。
-				if inPeriod {
-					for _, t := range stasks {
-						if schoolPending(t) {
-							it.School = append(it.School, schoolTaskView{
-								Code: t.TaskCode, Status: t.Status, Prog: t.Progress, Target: t.TargetCount,
-							})
-						}
-					}
-				}
-			}
 		}(i, st.UID)
 	}
 	wg.Wait()
 	pending, claimable, manual, expired := 0, 0, 0, 0
 	for _, it := range items {
-		pending += len(it.Growth) + len(it.School)
+		pending += len(it.Growth)
 		claimable += len(it.Claimable)
 		manual += len(it.Manual)
 		expired += len(it.Expired)
@@ -229,7 +204,7 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 type queueItem struct {
 	UID      string `json:"uid"`
 	Nickname string `json:"nickname"`
-	Kind     string `json:"kind"` // growth | school
+	Kind     string `json:"kind"` // growth | claim_only
 	Code     string `json:"code"`
 	Status   string `json:"status"` // pending | running | done | skipped | error
 	Message  string `json:"message,omitempty"`
@@ -253,18 +228,19 @@ func (p *Panel) queue() *queueState {
 	return p.q
 }
 
-// tasksRunQueue 启动执行队列：{concurrency:1-4, growth:bool, school:bool}。
-// 先做一次扫描，把全部待办项排队（growth 按账号内 autoActions 顺序执行，
-// school 逐账号跑闭环），账号内串行、账号间受并发信号量约束。
+// tasksRunQueue 启动执行队列：{concurrency:1-4, growth:bool}。
+// 先做一次扫描，把全部待办项排队（growth 按账号内 autoActions 顺序执行），
+// 账号内串行、账号间受并发信号量约束。
 func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Concurrency int  `json:"concurrency"`
 		Growth      bool `json:"growth"`
-		School      bool `json:"school"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	if !body.Growth && !body.School {
-		body.Growth, body.School = true, true
+	// growth 是唯一的任务来源（开学季活动已于 2026-09-24 结束，整链下线）。
+	// 保留这个开关是因为扫描本身要打上游，明确关掉时可以省掉这些请求。
+	if !body.Growth {
+		body.Growth = true
 	}
 	if body.Concurrency < 1 {
 		body.Concurrency = 1
@@ -283,11 +259,6 @@ func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 
 	// 扫描待办（复用扫描逻辑的拉取部分）。
 	states := p.cfg.Pool.List()
-	type acct struct {
-		a      *auth.Auth
-		grow   []upstream.Task
-		school bool
-	}
 	var accts []queueAccount
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -300,7 +271,7 @@ func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		wg.Add(1)
-		go func(a *auth.Auth, wantSchool bool) {
+		go func(a *auth.Auth) {
 			defer wg.Done()
 			one := queueAccount{a: a}
 			// D4 门控：global 账号无 CN 成长/开学季任务体系，不发起任何上游调用。
@@ -327,24 +298,12 @@ func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 					})
 				}
 			}
-			if wantSchool && p.cfg.Scheduler != nil {
-				// in_period=false 时不入队：活动结束后 schoolAccount 会静默 return，
-				// 队列却仍把它标记为 done「0/5 项已完成」——假成功比失败更误导。
-				if stasks, inPeriod, err := p.cfg.Upstream.SchoolTasks(a); err == nil && inPeriod {
-					for _, t := range stasks {
-						if schoolPending(t) { // 认证等不可做任务已在口径外
-							one.school = true
-							break
-						}
-					}
-				}
-			}
-			if len(one.grow) > 0 || len(one.claim) > 0 || one.school {
+			if len(one.grow) > 0 || len(one.claim) > 0 {
 				mu.Lock()
 				accts = append(accts, one)
 				mu.Unlock()
 			}
-		}(a, body.School)
+		}(a)
 	}
 	wg.Wait()
 
@@ -358,9 +317,6 @@ func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 			// claim_only：进度已达标，只需领奖。与 growth 分开是因为它**不跑行为链**——
 			// 重跑一遍再领会多消耗真实对话/上报配额，而进度早已满足。
 			items = append(items, queueItem{UID: one.a.UID, Nickname: one.a.Nickname, Kind: "claim_only", Code: t.TaskCode, Status: "pending"})
-		}
-		if one.school {
-			items = append(items, queueItem{UID: one.a.UID, Nickname: one.a.Nickname, Kind: "school", Code: "school_daily", Status: "pending"})
 		}
 	}
 	if len(items) == 0 {
@@ -379,7 +335,7 @@ func (p *Panel) tasksRunQueue(w http.ResponseWriter, r *http.Request) {
 	q.mu.Unlock()
 
 	go p.runQueueItems(accts, items, body.Concurrency)
-	log.Printf("panel: 队列启动：%d 项（并发 %d，成长 %v 开学季 %v）", len(items), body.Concurrency, body.Growth, body.School)
+	log.Printf("panel: 队列启动：%d 项（并发 %d）", len(items), body.Concurrency)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true, "total": len(items), "seq": seq})
 }
 
@@ -429,8 +385,6 @@ func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurren
 					msg, err = p.runGrowthQueued(one.a, code)
 				case "claim_only":
 					msg, err = p.claimOnlyQueued(one.a, code)
-				case "school":
-					msg, err = p.runSchoolQueued(one.a)
 				}
 				if err != nil {
 					p.queueMarkAt(i, "error", err.Error())
@@ -446,10 +400,9 @@ func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurren
 
 // queueAccount 队列执行的账号单元（runQueueItems 参数）。
 type queueAccount struct {
-	a      *auth.Auth
-	grow   []upstream.Task // 需要跑行为动作的任务
-	claim  []upstream.Task // 进度已达标、只需领奖的任务
-	school bool
+	a     *auth.Auth
+	grow  []upstream.Task // 需要跑行为动作的任务
+	claim []upstream.Task // 进度已达标、只需领奖的任务
 }
 
 // snapshotAt 锁内读条目三元组（避免锁外持有指针）。
@@ -570,27 +523,6 @@ func (p *Panel) claimOnlyQueued(a *auth.Auth, code string) (string, error) {
 	return msg, nil
 }
 
-// runSchoolQueued 单账号开学季闭环（scheduler 四任务 + 抽奖）。
-func (p *Panel) runSchoolQueued(a *auth.Auth) (string, error) {
-	if p.cfg.Scheduler == nil {
-		return "", fmt.Errorf("scheduler 不可用")
-	}
-	p.cfg.Scheduler.RunSchoolAccountNow(a)
-	// 闭环后回读开学季状态做汇总。
-	tasks, _, err := p.cfg.Upstream.SchoolTasks(a)
-	if err != nil {
-		return "闭环已执行（状态回读失败）", nil
-	}
-	done := 0
-	for _, t := range tasks {
-		if t.Status == "claimed" || (t.TaskCode != "task_student_verify" && t.Progress >= t.TargetCount && t.TargetCount > 0) {
-			done++
-		}
-	}
-	log.Printf("panel: 队列 school uid=%s: 闭环完成（%d/%d 项完成）", a.UID, done, len(tasks))
-	return fmt.Sprintf("开学季闭环完成（%d/%d 项已完成，抽奖已抽完）", done, len(tasks)), nil
-}
-
 // tasksQueueStatus 队列状态（轮询用）。
 func (p *Panel) tasksQueueStatus(w http.ResponseWriter, r *http.Request) {
 	q := p.queue()
@@ -607,75 +539,4 @@ func (p *Panel) tasksQueueStatus(w http.ResponseWriter, r *http.Request) {
 		"seq":        q.seq,
 		"items":      items,
 	})
-}
-
-// ---------------------------------------------------------------------------
-// 开学季独立视图
-// ---------------------------------------------------------------------------
-
-// schoolStatus 全账号开学季任务状态（含抽奖余额）。
-func (p *Panel) schoolStatus(w http.ResponseWriter, r *http.Request) {
-	states := p.cfg.Pool.List()
-	type acctView struct {
-		UID      string           `json:"uid"`
-		Nickname string           `json:"nickname"`
-		InPeriod bool             `json:"in_period"`
-		Tasks    []schoolTaskView `json:"tasks"`
-		Chances  int              `json:"chances"`
-		Err      string           `json:"error,omitempty"`
-	}
-	out := make([]acctView, 0, len(states))
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	for _, st := range states {
-		if st.Disabled {
-			continue
-		}
-		a := p.cfg.Pool.AuthByUID(st.UID)
-		if a == nil {
-			continue
-		}
-		wg.Add(1)
-		go func(a *auth.Auth) {
-			defer wg.Done()
-			v := acctView{UID: a.UID, Nickname: a.Nickname}
-			// D4 门控：global 账号无开学季活动，不发起任何上游调用。
-			if a.IsGlobal() {
-				v.Err = "global realm（无开学季活动）"
-				mu.Lock()
-				out = append(out, v)
-				mu.Unlock()
-				return
-			}
-			tasks, inPeriod, err := p.cfg.Upstream.SchoolTasks(a)
-			if err != nil {
-				v.Err = err.Error()
-			} else {
-				v.InPeriod = inPeriod
-				for _, t := range tasks {
-					v.Tasks = append(v.Tasks, schoolTaskView{
-						Code: t.TaskCode, Status: t.Status, Prog: t.Progress, Target: t.TargetCount,
-					})
-				}
-			}
-			v.Chances, _ = p.cfg.Upstream.SchoolChances(a)
-			mu.Lock()
-			out = append(out, v)
-			mu.Unlock()
-		}(a)
-	}
-	wg.Wait()
-	sort.Slice(out, func(i, j int) bool { return out[i].Nickname < out[j].Nickname })
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accounts": out})
-}
-
-// schoolRunAll 一键执行全部账号开学季闭环（异步，进度看任务频道日志）。
-func (p *Panel) schoolRunAll(w http.ResponseWriter, r *http.Request) {
-	if p.cfg.Scheduler == nil {
-		writeErr(w, http.StatusNotImplemented, "scheduler not available")
-		return
-	}
-	go p.cfg.Scheduler.RunSchoolNow()
-	log.Printf("panel: 开学季全账号闭环已触发")
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }

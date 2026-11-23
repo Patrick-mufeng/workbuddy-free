@@ -28,11 +28,14 @@ type LogEntry struct {
 }
 
 // taskPrefixes 任务动作日志的行首标识（scheduler 与 panel 的既有口径）。
+//
+// 保留 "school "：开学季功能已下线，但历史日志（含已轮转的 log 文件回读）
+// 仍带这个前缀，删掉会让那些行掉进「系统」频道、与真实系统事件混在一起。
 var taskPrefixes = []string{
 	"school ", "streak-bonus ", "travel ", "blackcat ", "lottery ",
 	"checkin ", "activity ", "keepalive ", "balance ", "user-resource ",
 	"panel: 任务", "panel: 一键", "panel: checkin", "panel: 手动",
-	"panel: 队列", "panel: 开学季",
+	"panel: 队列",
 }
 
 // tsPrefixRe log 包默认 flags（日期 时间）产生的行首时间戳。

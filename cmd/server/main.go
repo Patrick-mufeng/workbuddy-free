@@ -40,7 +40,11 @@ import (
 //	1.1.0  任务板块按服务端下发分类（可自动/待领奖/需人工/已过期）；
 //	       补齐 valid_end 等 6 个上游字段；成长任务队列与开学季按 in_period 过滤；
 //	       网关 401 兜底刷新（签到/余额/chat 原地重试）。
-const appVersion = "1.1.0"
+//	1.2.0  开学季整链下线（活动 2026-09-24 已结束）：删面板状态卡、/school 路由、
+//	       scheduler 闭环与 upstream 开学季接口；任务中心只保留成长任务队列。
+//	1.3.0  新增「等级任务」只读展示（/activity/growth/tasks，无 /v2 前缀）。
+//	       与成长任务是两套独立清单、不互为超集，此前面板完全看不到这 5 项。
+const appVersion = "1.3.0"
 
 func main() {
 	cfgPath := flag.String("config", "config.json", "配置文件路径（默认当前目录 config.json；不存在时自动生成推荐配置）")

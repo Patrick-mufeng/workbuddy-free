@@ -161,6 +161,22 @@ body::after {
 .qcstats .qs.expired i { background: var(--line-strong, var(--ink-3)); opacity: .45; }
 .qgroup { padding: 4px 0 10px; }
 .qgroup + .qgroup { border-top: 1px solid var(--line-soft); }
+/* 等级任务行：只读列表（code / 标题 / 等级名 / 状态） */
+.lvrow {
+  display: grid; grid-template-columns: 140px 1fr 120px 92px;
+  gap: 10px; align-items: center; padding: 7px 15px; font-size: 12.5px;
+  border-top: 1px solid var(--line-soft);
+}
+.lvrow:hover { background: var(--surface-2); }
+.lvrow .code { font: 11px/1.35 var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lvrow .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lvrow .lvl { font-size: 11.5px; color: var(--ink-2); }
+.lvrow .st { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.lvhead {
+  display: grid; grid-template-columns: 140px 1fr 120px 92px;
+  gap: 10px; padding: 9px 15px 7px; font-size: 10.5px; color: var(--ink-3);
+  letter-spacing: .08em; text-transform: uppercase;
+}
 .qgroup header {
   display: flex; align-items: baseline; gap: 9px; padding: 10px 15px 6px;
   background: none; border: none; box-shadow: none;
@@ -187,26 +203,6 @@ body::after {
 .qdot.skip { background: var(--ink-3); }
 @keyframes qpulse { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .qdot.run { animation: none; } }
-.srow { display: grid; grid-template-columns: minmax(150px, 210px) 1fr auto; gap: 14px; align-items: center; padding: 12px 15px; }
-.srow + .srow { border-top: 1px solid var(--line-soft); }
-.srow .who .nm { font-weight: 700; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.srow .who .id { font: 10px var(--mono); color: var(--ink-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.shead {
-  display: grid; grid-template-columns: minmax(150px, 210px) 1fr auto;
-  gap: 14px; align-items: center; padding: 9px 15px 7px;
-  font-size: 10.5px; color: var(--ink-3); border-bottom: 1px solid var(--line-soft);
-  letter-spacing: .08em; text-transform: uppercase;
-}
-.shead .stasks span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stasks { display: grid; grid-template-columns: repeat(5, minmax(64px, 1fr)); gap: 6px 10px; }
-.stask { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
-.stask .mark { font-size: 13px; line-height: 1; width: 14px; text-align: center; flex: none; }
-.stask.ok .mark { color: var(--ok); }
-.stask.warn .mark { color: var(--warn); } .stask.warn .fr { color: var(--warn); font-variant-numeric: tabular-nums; }
-.stask.todo { color: var(--ink-3); }
-.srow .luck { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.srow .luck svg { width: 14px; height: 14px; opacity: .7; }
-.srow .err { grid-column: 1 / -1; font-size: 11.5px; color: var(--bad); margin-top: -4px; }
 .pulse { width: 8px; height: 8px; background: var(--ok); flex: none; box-shadow: 0 0 0 2px var(--ok-soft); }
 .pulse.bad { background: var(--bad); box-shadow: 0 0 0 2px var(--bad-soft); }
 .pulse.warn { background: var(--warn); box-shadow: 0 0 0 2px var(--warn-soft); }
@@ -713,19 +709,6 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
 
     <!-- 任务中心 -->
     <section class="view" id="view-taskscenter" hidden>
-      <div class="box" id="schoolBox">
-        <header>
-          <h3>开学季 <span class="hint">09-13 ~ 09-24 · 每日重置</span></h3>
-          <span class="tag mute" id="schoolBadge" hidden>活动已结束</span>
-          <span class="grow"></span>
-          <span class="note" id="schoolSummary"></span>
-          <button class="xs" id="btnSchoolRefresh">刷新</button>
-          <button class="xs primary" id="btnSchoolRunAll">全部账号执行闭环</button>
-        </header>
-        <div class="state" id="schoolState"><span class="dots">加载中</span></div>
-        <div id="schoolList"></div>
-      </div>
-
       <div class="box">
         <header>
           <h3>成长任务队列 <span class="hint" id="qcSummary"></span></h3>
@@ -752,6 +735,17 @@ legend { font-size: 11.5px; color: var(--ink-3); font-weight: 700; padding-botto
           <div class="d">扫描全部账号的成长任务，按「可自动完成 / 待领奖 / 需人工 / 已过期」分组展示。能跑的排进队列，其余的给出具体做法。</div>
         </div>
         <div id="qcList"></div>
+      </div>
+
+      <!-- 等级任务：「养虾」系列，与成长任务是两套独立清单，只读展示 -->
+      <div class="box">
+        <header>
+          <h3>等级任务 <span class="hint">仅展示 · 需在官方客户端完成</span></h3>
+          <span class="grow"></span>
+          <span class="note" id="lvNote">扫描后显示</span>
+        </header>
+        <div class="state" id="lvState"><span class="dots">尚未扫描</span></div>
+        <div id="lvList"></div>
       </div>
     </section>
 
